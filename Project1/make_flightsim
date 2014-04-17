@@ -1,0 +1,16 @@
+CC = g++
+CFLAGS = -Wall -g
+GLLIB= -lglut -lGLU -lGL -lm
+
+flightsim : main.o mesh.o imageloader.o
+	${CC} ${CFLAGS} mesh.o main.o imageloader.o ${GLLIB} -o flightsim
+
+mesh.o : mesh.cpp mesh.h
+	${CC} ${CFLAGS} -c mesh.cpp
+
+imageloader.o : imageloader.cpp imageloader.h
+	${CC} ${CFLAGS} -c imageloader.cpp
+
+main.o : main.cpp mesh.h imageloader.h
+	${CC} ${CFLAGS} -c main.cpp
+
