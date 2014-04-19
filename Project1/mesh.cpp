@@ -113,4 +113,46 @@ Vector3f getCentroid(Mesh& mesh)
 	return mean;
 }
 
+Vector3f getMax(Mesh&mesh)
+{
+	Vector3f max;
+	max.x=0;
+	max.y=0;
+	max.z=0;
+	int n=mesh.vertices.size();
+	for(int i=0;i<n;i++)
+	{
+		if(max.x < mesh.vertices[i].x)
+			max.x = mesh.vertices[i].x;
 
+		if(max.y < mesh.vertices[i].y)
+			max.y = mesh.vertices[i].y;
+
+		if(max.z < mesh.vertices[i].z)
+			max.z = mesh.vertices[i].z;
+	}
+
+	return max;
+}
+
+Vector3f getMin(Mesh&mesh)
+{
+	Vector3f min;
+	min.x=0;
+	min.y=0;
+	min.z=0;
+	int n=mesh.vertices.size();
+	for(int i=0;i<n;i++)
+	{
+		if(min.x > mesh.vertices[i].x)
+			min.x = mesh.vertices[i].x;
+
+		if(min.y > mesh.vertices[i].y)
+			min.y = mesh.vertices[i].y;
+
+		if(min.z > mesh.vertices[i].z)
+			min.z = mesh.vertices[i].z;
+	}
+
+	return min;
+}

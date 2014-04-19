@@ -42,6 +42,10 @@ struct Mesh{
 //Function that returns the centroid of the mesh
 Vector3f getCentroid(Mesh& mesh);
 
+// Return max and min x, y and z co-ordinates
+Vector3f getMax(Mesh&mesh);
+Vector3f getMin(Mesh&mesh);
+
 //Loads a Mesh given a path to an obj
 void loadMesh(Mesh& mesh,std::string filename);
 
