@@ -15,12 +15,6 @@ typedef struct
 	GLfloat z;
 } vector3d;
 
-typedef enum
-{
-	inside,
-	outside,
-	collided
-} collStatus;
 
 void initGl(void);
 void display(void);
@@ -36,19 +30,34 @@ GLfloat vectorMag(vector3d vector);
 vector3d vectorConstMult(vector3d vector, GLfloat constant);
 vector3d vectorNorm(vector3d vector);
 vector3d vectorAdd(vector3d vector1, vector3d vector2);
-GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMinus);
-collStatus ringCollDetect(vector3d centre, int ringID);
+GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMinus, GLfloat max, GLfloat inc, unsigned int retToZero);
+void ringCollDetect(vector3d centre, int ringID);
 vector3d vectorConvert(Vector3f vector);
 void drawAxis(void);
 void renderText(char *string, GLfloat x, GLfloat y);
+void calcFps(void);
+void idle(void);
+vector3d rotateAboutY(vector3d position, GLfloat angle);
+void passiveMouse(int x, int y);
+void reshape(int width, int height);
 
 int mRows, mCols;
 int **map; /* Pointer to the level map array */
 
 int keystate[256] = {0}; // Store if a key is pressed or not
 
+/* Window size */
+
+int windowWidth = 1280;
+int windowHeight = 720;
+
+GLfloat mouseX, mouseY;
+
+int mouseLatch = FALSE;
+
 /* Mathematical constants */
 #define RADS_TO_DEGS (180/3.141592654)
+#define DEGS_TO_RADS (3.141592654/180)
 
 
 /* Scaling factors to convert array to real space */
@@ -56,7 +65,16 @@ int keystate[256] = {0}; // Store if a key is pressed or not
 #define Y_SCLR 10
 #define Z_SCLR 10
 
-vector3d pos, ang;
+/* Constants to define how far wall is from real edge */
+#define X_MARGIN 2
+#define Y_MARGIN 1
+#define Z_MARGIN 10
+
+vector3d pos = {0,30,0}, ang;
+
+#define X_AXIS 0
+#define Y_AXIS 1
+#define Z_AXIS 2
 
 #define ANG_INC 2
 #define POS_INC 0.05
@@ -73,6 +91,8 @@ static GLfloat light0_position[] = {1.0,1.0,1.0,0.0};
 GLfloat force =0;
 
 vector3d direction = {0,0,0}, velocity= {0,0,0}, normalisedDir = {1,0,0};
+
+GLfloat yAng = 0;
 
 #define UP 1
 #define DOWN 0
@@ -91,23 +111,30 @@ vector3d planeCentre, planeMax, planeMin;
 
 Image *planeTex;
 
+#define SKY_TEXTURE_FILENAME "sky.bmp"
+Image *skyTex;
+
+#define GROUND_TEXTURE_NAME "ground.bmp"
+Image *groundTex;
+
 /* Other stuff */
 
-int score;
+int score = 0;
+int lives = 3;
+float fps;
+int pause = 0;
 
 
 
 int main(int argc, char **argv)
 {
-	score = 0;
-
 	/* Read input map */
 	readInput("map.txt");
 
 	/* Initialise the GLUT window manager */
 	glutInit(&argc, argv);       
 	glutInitDisplayMode(GLUT_SINGLE | GLUT_RGBA | GLUT_DEPTH);
-	glutInitWindowSize(1280, 720);
+	glutInitWindowSize(windowWidth, windowHeight);
 	glutCreateWindow("Flight Simulator");
 
 	/* Register callback functions */
@@ -118,11 +145,18 @@ int main(int argc, char **argv)
 	glutKeyboardFunc(keyDown);
 	glutKeyboardUpFunc(keyUp);
 	glutTimerFunc(delay,timer,0);
+	glutIdleFunc(idle);
+	glutPassiveMotionFunc(passiveMouse);
+	glutReshapeFunc(reshape);
 
 	/* Load mesh and texture for plane */
 	loadMesh(planeMesh, PLANE_MESH_FILENAME);
 
 	planeTex = loadBMP(PLANE_TEXTURE_FILENAME);
+
+	skyTex = loadBMP(SKY_TEXTURE_FILENAME);
+
+	groundTex = loadBMP(GROUND_TEXTURE_NAME);
 
 	/* Find centre, max and min co-ordinates */
 
@@ -144,7 +178,8 @@ void initGl(void)
 
 	glMatrixMode(GL_PROJECTION); /* GL_PROJECTION is used for setting up viewing properties e.g lens angle etc. */
 	glLoadIdentity(); /* Initialise to identity matirix */
-	gluPerspective(45.0, (GLdouble)16/(GLdouble)9, 1.0, 400.0); /* Set up the field of view as perspective */
+	reshape(windowWidth, windowHeight); /* Set up field of view */
+//	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 400.0); /* Set up the field of view as perspective */
 	glClearColor (0.529, 0.808, 0.980, 1.0); /* Set background colour to blue */
 
 	glLineWidth(5.0);
@@ -154,17 +189,20 @@ void initGl(void)
 	//glEnable(GL_CULL_FACE);
     //glFrontFace(GL_CW);
 
-	glLightfv(GL_LIGHT0, GL_POSITION, light0_position);
 	glEnable(GL_LIGHTING);
-	glEnable(GL_LIGHT0);
 	glEnable(GL_COLOR_MATERIAL);
+	glEnable(GL_LIGHT0);
+	glEnable(GL_LIGHT1);
+	glLightfv(GL_LIGHT0, GL_SPECULAR, light0_position);
+	glLightfv(GL_LIGHT0, GL_SPECULAR, light0_position);
+
 
 	/* Set up texture mapping */
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, planeTex->width, planeTex->height, 0, GL_RGB, GL_UNSIGNED_BYTE, planeTex->pixels);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
 }
 
 /* This callback occurs whenever the system determines the window needs redrawing (or upon a call of glutPostRedisplay()) */
@@ -175,21 +213,22 @@ void display(void)
 	glMatrixMode(GL_MODELVIEW); /* GL_MODELVIEW is used to set up the model and translate into camera space */
 	glLoadIdentity(); /* Initialise to identity matirix */
 
-	gluLookAt(-5,0.5,0, 0,0,0, 0,1,0); // Normal ("behind") camera view
+	gluLookAt(-5,0.5,0, 1,0,0, 0,1,0); // Normal ("behind") camera view
+//	gluLookAt(-5,0,0, 0,0,0, 0,1,0); // Debug - behind view
+//	gluLookAt(0,100,0, 0,0,0, 1,0,0); // Debug - above view
+	glRotatef(-yAng,0.0,1.0,0.0);
 
-//	gluLookAt(0,20,0, 0,0,0, 1,0,0); // Debug - above view
+	glRotatef(-45.0+90*mouseX,0.0,1.0,0.0);
+	glRotatef(-45.0+90*mouseY,0.0,0.0,1.0);
+
 
 	glTranslatef(-pos.x,-pos.y,-pos.z); /* Translate to viewpoint */
-
-//	glRotatef(ang.x,1.0,0.0,0.0); /* Rotate around X axis */
-//	glRotatef(ang.y,0.0,1.0,0.0); /* Rotate around Y axis */
-//	glRotatef(ang.z,0.0,0.0,1.0); /* Rotate around Z axis */
-
 
 	/* Draw the plane */
 	glPushMatrix();
 	glTranslatef(pos.x, pos.y, pos.z);
 	drawAxis();
+	glRotatef(yAng,0.0,1.0,0.0);
 
 	glColor3f(1.0,0.0,0.0); /* Draw in Red */
 
@@ -201,7 +240,7 @@ void display(void)
 
 
 	glEnable(GL_TEXTURE_2D);
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, planeTex->width, planeTex->height, 0, GL_RGB, GL_UNSIGNED_BYTE, planeTex->pixels);
 	drawMesh(planeMesh);
 	glDisable(GL_TEXTURE_2D);
 
@@ -231,27 +270,67 @@ void display(void)
 			}
 
 	/* Draw the walls */
-	GLfloat xUprBnd = (GLfloat)(X_SCLR*(mRows)) + 5.0;
-	GLfloat xLwrBnd = -5.0;
-	GLfloat yUprBnd = (GLfloat)(Y_SCLR*5); /* WARNING - NEEDS FILLING WITH REAL VALUE!! */
-	GLfloat yLwrBnd = -TORUS_OUTER;
-	GLfloat zUprBnd = Z_SCLR*midpoint + TORUS_OUTER;
+	GLfloat xUprBnd = (GLfloat)(X_SCLR* (mRows + X_MARGIN));
+	GLfloat xLwrBnd = -X_SCLR*X_MARGIN;
+	GLfloat yUprBnd = (GLfloat)(Y_SCLR + Y_SCLR*(5 + Y_MARGIN) ); /* WARNING - NEEDS FILLING WITH REAL VALUE!! */
+	GLfloat yLwrBnd = -(TORUS_OUTER + Y_MARGIN*Y_SCLR);
+	GLfloat zUprBnd = Z_SCLR*(Z_MARGIN + midpoint) + TORUS_OUTER;
 	GLfloat zLwrBnd = -zUprBnd;
 
 	glColor3f(0.0,1.0,0.0); /* Draw walls in green */
-	glBegin(GL_POLYGON); /* Floor */
-		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd); /* Distance, then Height, then L/R */
-		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
-		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
-		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
-	glEnd();
 
 	glBegin(GL_POLYGON); /* Back wall */
-	glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
+		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
 		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
 		glVertex3f (xUprBnd, yUprBnd, zUprBnd);
 		glVertex3f (xUprBnd, yUprBnd, zLwrBnd);
 	glEnd();
+
+//	glBegin(GL_POLYGON); /* Front wall */
+//		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd);
+//		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
+//		glVertex3f (xLwrBnd, yUprBnd, zUprBnd);
+//		glVertex3f (xLwrBnd, yUprBnd, zLwrBnd);
+//	glEnd();
+
+	glEnable(GL_TEXTURE_2D);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, groundTex->width-1, groundTex->height-1, 0, GL_RGB, GL_UNSIGNED_BYTE, groundTex->pixels);
+
+	glBegin(GL_POLYGON); /* Floor */
+		glTexCoord2f(0.0, 0.0);
+		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd); /* Distance, then Height, then L/R */
+		glTexCoord2f(0.0, 5.0);
+		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(10.0, 0.0);
+		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(10.0, 5.0);
+		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
+	glEnd();
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, skyTex->width-1, skyTex->height-1, 0, GL_RGB, GL_UNSIGNED_BYTE, skyTex->pixels);
+	glBegin(GL_POLYGON); /* Left wall */
+		glTexCoord2f(0.0, 0.0);
+		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd);
+		glTexCoord2f(0.0, 1.0);
+		glVertex3f (xLwrBnd, yUprBnd, zLwrBnd);
+		glTexCoord2f(1.0, 0.0);
+		glVertex3f (xUprBnd, yUprBnd, zLwrBnd);
+		glTexCoord2f(1.0, 1.0);
+		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
+	glEnd();
+
+	glBegin(GL_POLYGON); /* Right wall */
+		glTexCoord2f(0.0, 0.0);
+		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(0.0, 1.0);
+		glVertex3f (xLwrBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(1.0, 0.0);
+		glVertex3f (xUprBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(1.0, 1.0);
+		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
+	glEnd();
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_TEXTURE_2D);
 
 	/* Render score */
 	glMatrixMode( GL_PROJECTION );
@@ -262,8 +341,8 @@ void display(void)
 	glLoadIdentity();
 	glDisable( GL_DEPTH_TEST );
 
-	char stringToPrint[20];
-	sprintf(stringToPrint,"Score: %d", score);
+	char stringToPrint[100];
+	sprintf(stringToPrint,"Score: %d Lives: %d FPS: %f", score, lives, fps);
 	renderText(stringToPrint,-1,0.9);
 	glPopMatrix();
 
@@ -280,79 +359,12 @@ void display(void)
 /* This callback occurs upon button press */
 void mouse(int button, int state, int x, int y)
 {
+	printf("MOUSE! %d\n", button);
+	if(button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
+		mouseLatch = !mouseLatch;
 
 }
 
-void keyboard(unsigned char key, int x, int y)
-{
-	switch(key)
-	{
-	case 'W': case 'w':
-//		pos.x -=POS_INC;
-//		glutPostRedisplay();
-		adjForce(UP);
-		break;
-
-	case 'S': case 's':
-//		pos.x +=POS_INC;
-//		glutPostRedisplay();
-		adjForce(DOWN);
-		break;
-
-	case 'A': case 'a':
-		pos.z +=POS_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'D': case 'd':
-		pos.z -=POS_INC;
-		glutPostRedisplay();
-		break;
-
-
-	case 'O': case 'o':
-		pos.y +=POS_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'L': case 'l':
-		pos.y -=POS_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'Y': case 'y':
-		ang.x +=ANG_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'H': case 'h':
-		ang.x -=ANG_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'U': case 'u':
-		ang.y +=ANG_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'J': case 'j':
-		ang.y -=ANG_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'I': case 'i':
-		ang.z +=ANG_INC;
-		glutPostRedisplay();
-		break;
-
-	case 'K': case 'k':
-		ang.z -=ANG_INC;
-		glutPostRedisplay();
-		break;
-	default:
-		break;
-	}
-}
 
 void readInput(char* filename)
 {
@@ -426,7 +438,9 @@ void setPosition(void)
 
 	normalisedDir = vectorNorm(direction);
 
-	velocity = vectorConstMult(normalisedDir, velocityMagnitude);
+	vector3d rotatedDir = rotateAboutY(normalisedDir, yAng);
+
+	velocity = vectorConstMult(rotatedDir, velocityMagnitude);
 
 	pos = vectorAdd(pos, vectorConstMult(velocity,delayInSeconds) );
 
@@ -452,6 +466,16 @@ void timer(int x)
 
 	direction.x = 1;
 
+	if(keystate['p'] == TRUE)
+		pause = !pause;
+
+	if(pause)
+	{
+		glutTimerFunc(delay, timer, 0);
+		return;
+	}
+
+
 	if(keystate['o'] == TRUE)
 		adjForce(UP);
 	
@@ -459,16 +483,15 @@ void timer(int x)
 		adjForce(DOWN);
 
 
-	direction.y = procDirIn(direction.y, 'w', 's');
+	direction.y = procDirIn(direction.y, 'w', 's', 5.0, POS_INC, TRUE);
+	direction.z = procDirIn(direction.z, 'd', 'a', 5.0, POS_INC, TRUE);
 
-	direction.z = procDirIn(direction.z, 'd', 'a');
+	yAng = procDirIn(yAng, 'i','k', 45.0, 1.0, TRUE);
 
 
-//	printf("direction: x:%f, y:%f, z:%f\nvelocity: x:%f, y:%f, z:%f\npos: x:%f, y:%f, z:%f\n",direction.x,direction.y,direction.z, velocity.x,velocity.y, velocity.z,pos.x,pos.y,pos.z);
+//	printf("direction: x:%f, y:%f, z:%f\nvelocity: x:%f, y:%f, z:%f\npos: x:%f, y:%f, z:%f\nyAng: %f\n",direction.x,direction.y,direction.z, velocity.x,velocity.y, velocity.z,pos.x,pos.y,pos.z,yAng);
 
 	setPosition();
-
-	glutPostRedisplay();
 	
 	glutTimerFunc(delay, timer, 0);
 
@@ -513,59 +536,66 @@ vector3d vectorAdd(vector3d vector1, vector3d vector2)
 }
 
 
-GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMinus)
+GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMinus, GLfloat max, GLfloat inc, unsigned int retToZero)
 {
 	if(keystate[keyPlus] == keystate [keyMinus]) // If both "up" and "down" keys are held return to zero.
 	{
+		if(retToZero == FALSE)
+			return direction;
+		if(abs(direction) < 2*inc)
+			direction = 0;
 		if(direction > 0)
-			direction -= POS_INC;
+			direction -= inc;
 		if(direction < 0)
-			direction += POS_INC;
+			direction += inc;
 		return direction;
 	}
 
-	if(keystate[keyPlus] == TRUE && direction < 5.0) // Increment if we need to go up
-		direction += POS_INC;
 
-	if(keystate[keyMinus] == TRUE && direction > -5.0) // Decrement if we need to go down
-		direction -= POS_INC;
+
+	if(keystate[keyPlus] == TRUE && direction < max) // Increment if we need to go up
+		direction += inc;
+
+	if(keystate[keyMinus] == TRUE && direction > -max) // Decrement if we need to go down
+		direction -= inc;
 
 	return direction;
 }
 
-collStatus ringCollDetect(vector3d centre, int ringID)
+void ringCollDetect(vector3d centre, int ringID)
 {
-	collStatus status = outside;
 
 	static int lastIn = -1;
 
+	const GLfloat torusTotal = TORUS_OUTER+TORUS_INNER;
+	const GLfloat torusGap = TORUS_OUTER-TORUS_INNER;
+
 
 	/* Check if inside */
-	if(pos.x + planeMax.x > centre.x - TORUS_INNER && pos.x + planeMin.x < centre.x + TORUS_INNER)
+	if(lastIn != ringID)
 	{
-		if(pos.z + planeMin.z < centre.z + TORUS_OUTER + TORUS_INNER && pos.z + planeMax.z > centre.z - TORUS_OUTER - TORUS_INNER )
+		if(pos.x + planeMax.x > centre.x - TORUS_INNER && pos.x + planeMin.x < centre.x + TORUS_INNER)
 		{
-			if(pos.y + planeMin.y > centre.y - TORUS_OUTER - TORUS_INNER && pos.y + planeMax.y < centre.y + TORUS_OUTER + TORUS_INNER)
+			if(pos.z + planeMin.z < centre.z + torusTotal && pos.z + planeMax.z > centre.z - torusTotal )
 			{
-				status = inside;
-				if(lastIn != ringID)
+				if(pos.y + planeMax.y > centre.y - torusTotal && pos.y + planeMin.y < centre.y + torusTotal)
 				{
+					/* If we're here, we're inside */
 					score++;
 					lastIn = ringID;
-					printf("Score: %d\n", score);
-				}
-				/* Check if collided */
-				if( (pos.z + planeMax.z > centre.z + TORUS_OUTER)  || (pos.z + planeMin.z < centre.z - TORUS_OUTER) || (pos.y + planeMax.y < centre.y - TORUS_OUTER) || (pos.y + planeMin.y > centre.y + TORUS_OUTER) )
-				{
-					status = collided;
-					printf("Collided.\n");
+					/* Check if collided */
+					printf("%d %d %d %d\n", (pos.z + planeMax.z > centre.z + torusGap), (pos.z + planeMin.z < centre.z - torusGap), (pos.y + planeMin.y < centre.y - torusGap), (pos.y + planeMax.y > centre.y + torusGap));
+					if( (pos.z + planeMax.z > centre.z + torusGap) || (pos.z + planeMin.z < centre.z - torusGap) || (pos.y + planeMin.y < centre.y - torusGap) || (pos.y + planeMax.y > centre.y + torusGap) )
+					{
+						lives--;
+						printf("Collided.\n");
+					}
 				}
 			}
-		}
 
+		}
 	}
 
-	return status;
 }
 
 vector3d vectorConvert(Vector3f vector)
@@ -612,4 +642,82 @@ void renderText(char *string, GLfloat x, GLfloat y)
 	for(i=0; i < stringLength; i++)
 		glutBitmapCharacter(GLUT_BITMAP_9_BY_15, string[i]);
 
+}
+
+void idle(void)
+{
+	if(!pause)
+	{
+		calcFps();
+		glutPostRedisplay();
+	}
+
+}
+
+void calcFps(void)
+{
+	static int curTime = 0;
+	static int prevTime = 0;
+	int interval;
+
+	static int frameCount = 0;
+
+	frameCount++;
+
+    //  Get the number of milliseconds since glutInit called
+    //  (or first call to glutGet(GLUT ELAPSED TIME)).
+    curTime = glutGet(GLUT_ELAPSED_TIME);
+
+	interval = curTime - prevTime;
+
+	if (interval >=1000)
+	{
+		fps = frameCount*(interval/1000.0);
+
+		prevTime = curTime;
+
+		frameCount = 0;
+	}
+
+
+
+}
+
+vector3d rotateAboutY(vector3d position, GLfloat angle)
+{
+	GLfloat cosAng = cos(DEGS_TO_RADS*angle);
+	GLfloat sinAng = sin(DEGS_TO_RADS*angle);
+
+	position.x = cosAng*position.x + sinAng*position.z;
+	position.z = -sinAng*position.x + cosAng*position.z;
+
+	return position;
+
+}
+
+void passiveMouse(int x, int y)
+{
+	if (mouseLatch)
+		return;
+
+	mouseX = (GLfloat)x/(GLfloat)windowWidth;
+	mouseY = (GLfloat)y/(GLfloat)windowHeight;
+//	printf("x: %f, y:%f\n", mouseX, mouseY);
+}
+
+void reshape(int width, int height)
+{
+	if(height == 0)
+		height = 1;
+	windowWidth = width;
+	windowHeight = height;
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+
+	glViewport(0,0,windowWidth, windowHeight);
+
+	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 1000.0); /* Set up the field of view as perspective */
+	glMatrixMode(GL_MODELVIEW);
+	//	initGl();
 }
