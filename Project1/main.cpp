@@ -40,11 +40,13 @@ void idle(void);
 vector3d rotateAboutY(vector3d position, GLfloat angle);
 void passiveMouse(int x, int y);
 void reshape(int width, int height);
+void loadTexture(GLuint texture, char *filename);
 
 int mRows, mCols;
 int **map; /* Pointer to the level map array */
 
 int keystate[256] = {0}; // Store if a key is pressed or not
+int keyToggle[256] = {0}; //Store if a key change has not been read yet
 
 /* Window size */
 
@@ -54,6 +56,7 @@ int windowHeight = 720;
 GLfloat mouseX, mouseY;
 
 int mouseLatch = FALSE;
+int mouseControl = FALSE;
 
 /* Mathematical constants */
 #define RADS_TO_DEGS (180/3.141592654)
@@ -62,8 +65,8 @@ int mouseLatch = FALSE;
 
 /* Scaling factors to convert array to real space */
 #define X_SCLR 100
-#define Y_SCLR 10
-#define Z_SCLR 10
+#define Y_SCLR 15
+#define Z_SCLR 25
 
 /* Constants to define how far wall is from real edge */
 #define X_MARGIN 2
@@ -82,10 +85,14 @@ vector3d pos = {0,30,0}, ang;
 /* Light position */
 static GLfloat light0_position[] = {1.0,1.0,1.0,0.0};
 
+/* Fog intensity */
+static GLfloat fog_color[] = {0.5,0.5,0.5,1.0};
 
-#define TORUS_DETAIL 100
-#define TORUS_OUTER	3.0
-#define TORUS_INNER	0.3
+
+#define TORUS_SIDES 5
+#define TORUS_RINGS 20
+#define TORUS_OUTER	6.0
+#define TORUS_INNER	0.5
 
 /* Velocity */
 GLfloat force =0;
@@ -99,7 +106,7 @@ GLfloat yAng = 0;
 
 const GLfloat maxForce = 10000;
 const GLfloat forceIncrement = 100;
-const GLfloat airResistanceCoefficient = 0.5;
+const GLfloat airResistanceCoefficient = 0.2;
 const unsigned int delay = 10;
 
 /* Plane mesh and texture stuff */
@@ -109,13 +116,20 @@ const unsigned int delay = 10;
 Mesh planeMesh;
 vector3d planeCentre, planeMax, planeMin;
 
-Image *planeTex;
-
 #define SKY_TEXTURE_FILENAME "sky.bmp"
-Image *skyTex;
 
-#define GROUND_TEXTURE_NAME "ground.bmp"
-Image *groundTex;
+#define GROUND_TEXTURE_FILENAME "ground.bmp"
+
+const GLfloat skyTexSize = 1;
+const GLfloat groundTexSize = 3;
+
+const GLsizei numTextures = 3;
+GLuint texName[numTextures];
+
+/* Implement the GL_MIRRORED_REPEAT feature */
+#ifndef GL_MIRRORED_REPEAT
+#define GL_MIRRORED_REPEAT 0x8370
+#endif
 
 /* Other stuff */
 
@@ -128,6 +142,8 @@ int pause = 0;
 
 int main(int argc, char **argv)
 {
+//	printf("Vendor: %s\nRenderer: %s\nVersion: %s\nExtensions: %s\n",(const char*)glGetString( GL_VENDOR),(const char*)glGetString( GL_RENDERER),(const char*)glGetString( GL_VERSION),(const char*)glGetString( GL_EXTENSIONS));
+
 	/* Read input map */
 	readInput("map.txt");
 
@@ -152,11 +168,7 @@ int main(int argc, char **argv)
 	/* Load mesh and texture for plane */
 	loadMesh(planeMesh, PLANE_MESH_FILENAME);
 
-	planeTex = loadBMP(PLANE_TEXTURE_FILENAME);
 
-	skyTex = loadBMP(SKY_TEXTURE_FILENAME);
-
-	groundTex = loadBMP(GROUND_TEXTURE_NAME);
 
 	/* Find centre, max and min co-ordinates */
 
@@ -194,15 +206,28 @@ void initGl(void)
 	glEnable(GL_LIGHT0);
 	glEnable(GL_LIGHT1);
 	glLightfv(GL_LIGHT0, GL_SPECULAR, light0_position);
-	glLightfv(GL_LIGHT0, GL_SPECULAR, light0_position);
+	glLightfv(GL_LIGHT1, GL_AMBIENT, light0_position);
 
 
-	/* Set up texture mapping */
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+
+	/* Set up fog */
+
+	glEnable(GL_FOG);
+	glFogi(GL_FOG_MODE, GL_EXP); // Rate of fade
+	glFogfv(GL_FOG_COLOR, fog_color); // Colour (RGBA)
+	glFogf(GL_FOG_DENSITY,0.005); // Density
+    glHint (GL_FOG_HINT, GL_DONT_CARE);
+	glFogf(GL_FOG_START, 10.0); // Start depth
+	glFogf(GL_FOG_END,1000.0); // End depth
+
+	glGenTextures(numTextures, texName);
+	loadTexture(texName[0], PLANE_TEXTURE_FILENAME);
+	loadTexture(texName[1], GROUND_TEXTURE_FILENAME);
+	loadTexture(texName[2], SKY_TEXTURE_FILENAME);
+
+
+
+
 }
 
 /* This callback occurs whenever the system determines the window needs redrawing (or upon a call of glutPostRedisplay()) */
@@ -218,8 +243,11 @@ void display(void)
 //	gluLookAt(0,100,0, 0,0,0, 1,0,0); // Debug - above view
 	glRotatef(-yAng,0.0,1.0,0.0);
 
-	glRotatef(-45.0+90*mouseX,0.0,1.0,0.0);
-	glRotatef(-45.0+90*mouseY,0.0,0.0,1.0);
+	if(!mouseControl)
+	{
+		glRotatef(-45.0+90*mouseX,0.0,1.0,0.0);
+		glRotatef(-45.0+90*mouseY,0.0,0.0,1.0);
+	}
 
 
 	glTranslatef(-pos.x,-pos.y,-pos.z); /* Translate to viewpoint */
@@ -227,7 +255,7 @@ void display(void)
 	/* Draw the plane */
 	glPushMatrix();
 	glTranslatef(pos.x, pos.y, pos.z);
-	drawAxis();
+//	drawAxis();
 	glRotatef(yAng,0.0,1.0,0.0);
 
 	glColor3f(1.0,0.0,0.0); /* Draw in Red */
@@ -240,12 +268,11 @@ void display(void)
 
 
 	glEnable(GL_TEXTURE_2D);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, planeTex->width, planeTex->height, 0, GL_RGB, GL_UNSIGNED_BYTE, planeTex->pixels);
+	glBindTexture(GL_TEXTURE_2D, texName[0]);
 	drawMesh(planeMesh);
 	glDisable(GL_TEXTURE_2D);
 
 	glPopMatrix();
-
 
 
 	/* Draw the rings */
@@ -264,7 +291,7 @@ void display(void)
 				glPushMatrix();
 				glTranslatef(ringPos.x,ringPos.y, ringPos.z); /* Distance then height then left/right */
 				glRotatef(90.0,0.0,1.0,0.0);
-				glutSolidTorus(TORUS_INNER,TORUS_OUTER,TORUS_DETAIL,TORUS_DETAIL);
+				glutSolidTorus(TORUS_INNER,TORUS_OUTER,TORUS_SIDES,TORUS_RINGS);
 				glPopMatrix();
 				ringID++;
 			}
@@ -276,6 +303,12 @@ void display(void)
 	GLfloat yLwrBnd = -(TORUS_OUTER + Y_MARGIN*Y_SCLR);
 	GLfloat zUprBnd = Z_SCLR*(Z_MARGIN + midpoint) + TORUS_OUTER;
 	GLfloat zLwrBnd = -zUprBnd;
+
+	GLfloat skyHeight = skyTexSize;
+	GLfloat skyWidth = ( (xUprBnd - xLwrBnd)/(yUprBnd - yLwrBnd) )*skyTexSize;
+
+	GLfloat groundWidth = groundTexSize;
+	GLfloat groundHeight = ( (xUprBnd - xLwrBnd)/(zUprBnd - zLwrBnd) )*groundTexSize;
 
 	glColor3f(0.0,1.0,0.0); /* Draw walls in green */
 
@@ -294,42 +327,37 @@ void display(void)
 //	glEnd();
 
 	glEnable(GL_TEXTURE_2D);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, groundTex->width-1, groundTex->height-1, 0, GL_RGB, GL_UNSIGNED_BYTE, groundTex->pixels);
+	glBindTexture(GL_TEXTURE_2D, texName[1]);
 
 	glBegin(GL_POLYGON); /* Floor */
-		glTexCoord2f(0.0, 0.0);
-		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd); /* Distance, then Height, then L/R */
-		glTexCoord2f(0.0, 5.0);
-		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
-		glTexCoord2f(10.0, 0.0);
-		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
-		glTexCoord2f(10.0, 5.0);
-		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
+		glTexCoord2f(0.0, 0.0); glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd); /* Distance, then Height, then L/R */
+		glTexCoord2f(groundWidth, 0.0); glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(groundWidth, groundHeight); glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(0.0, groundHeight); glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
 	glEnd();
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, skyTex->width-1, skyTex->height-1, 0, GL_RGB, GL_UNSIGNED_BYTE, skyTex->pixels);
+	glBindTexture(GL_TEXTURE_2D, texName[2]);
 	glBegin(GL_POLYGON); /* Left wall */
-		glTexCoord2f(0.0, 0.0);
-		glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd);
-		glTexCoord2f(0.0, 1.0);
-		glVertex3f (xLwrBnd, yUprBnd, zLwrBnd);
-		glTexCoord2f(1.0, 0.0);
-		glVertex3f (xUprBnd, yUprBnd, zLwrBnd);
-		glTexCoord2f(1.0, 1.0);
-		glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
+		glTexCoord2f(0.0, 0.0); glVertex3f (xLwrBnd, yLwrBnd, zLwrBnd);
+		glTexCoord2f(0.0, skyHeight); glVertex3f (xLwrBnd, yUprBnd, zLwrBnd);
+		glTexCoord2f(skyWidth, skyHeight); glVertex3f (xUprBnd, yUprBnd, zLwrBnd);
+		glTexCoord2f(skyWidth, 0.0); glVertex3f (xUprBnd, yLwrBnd, zLwrBnd);
 	glEnd();
 
 	glBegin(GL_POLYGON); /* Right wall */
-		glTexCoord2f(0.0, 0.0);
-		glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
-		glTexCoord2f(0.0, 1.0);
-		glVertex3f (xLwrBnd, yUprBnd, zUprBnd);
-		glTexCoord2f(1.0, 0.0);
-		glVertex3f (xUprBnd, yUprBnd, zUprBnd);
-		glTexCoord2f(1.0, 1.0);
-		glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(0.0, 0.0); glVertex3f (xLwrBnd, yLwrBnd, zUprBnd);
+		glTexCoord2f(0.0, skyHeight); glVertex3f (xLwrBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(skyWidth, skyHeight); glVertex3f (xUprBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(skyWidth, 0.0); glVertex3f (xUprBnd, yLwrBnd, zUprBnd);
 	glEnd();
-	glDisable(GL_TEXTURE_2D);
+
+	glBegin(GL_POLYGON); /* Ceiling */
+		glTexCoord2f(0.0, 0.0); glVertex3f (xLwrBnd, yUprBnd, zLwrBnd); /* Distance, then Height, then L/R */
+		glTexCoord2f(groundWidth, 0.0); glVertex3f (xLwrBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(groundWidth, groundHeight); glVertex3f (xUprBnd, yUprBnd, zUprBnd);
+		glTexCoord2f(0.0, groundHeight); glVertex3f (xUprBnd, yUprBnd, zLwrBnd);
+	glEnd();
+
 	glDisable(GL_TEXTURE_2D);
 
 	/* Render score */
@@ -415,7 +443,7 @@ void adjForce(unsigned int dir)
 		if(force < maxForce)
 			force += forceIncrement;
 	} else {
-		if(force > 0)
+	if(force > 0)
 			force -= forceIncrement;
 	}
 //	printf("Force: %f\n", force);
@@ -450,6 +478,7 @@ void setPosition(void)
 void keyDown(unsigned char key, int x, int y)
 {
 	keystate[key] = TRUE;
+	keyToggle[key] = TRUE;
 
 //	printf("Key: %c pressed.\n", key);
 }
@@ -457,6 +486,7 @@ void keyDown(unsigned char key, int x, int y)
 void keyUp(unsigned char key, int x, int y)
 {
 	keystate[key] = FALSE;
+	keyToggle[key] = TRUE;
 
 //	printf("Key: %c released.\n", key);
 }
@@ -466,8 +496,17 @@ void timer(int x)
 
 	direction.x = 1;
 
-	if(keystate['p'] == TRUE)
+	if(keystate['p'] == TRUE && keyToggle['p'] == TRUE) // Toggle pause
+	{
+		keyToggle['p'] = FALSE;
 		pause = !pause;
+	}
+
+	if(keystate['m'] == TRUE && keyToggle['m'] == TRUE) // Toggle mouse control
+	{
+		keyToggle['m'] = FALSE;
+		mouseControl = ! mouseControl;
+	}
 
 	if(pause)
 	{
@@ -482,9 +521,14 @@ void timer(int x)
 	if(keystate['l'] == TRUE)
 		adjForce(DOWN);
 
-
-	direction.y = procDirIn(direction.y, 'w', 's', 5.0, POS_INC, TRUE);
-	direction.z = procDirIn(direction.z, 'd', 'a', 5.0, POS_INC, TRUE);
+	if(mouseControl)
+	{
+		direction.z = -5.0f + 10.0f*mouseX;
+		direction.y = 5.0f - 10.0f*mouseY;
+	} else {
+		direction.y = procDirIn(direction.y, 'w', 's', 5.0, POS_INC, TRUE);
+		direction.z = procDirIn(direction.z, 'd', 'a', 5.0, POS_INC, TRUE);
+	}
 
 	yAng = procDirIn(yAng, 'i','k', 45.0, 1.0, TRUE);
 
@@ -542,6 +586,7 @@ GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMin
 	{
 		if(retToZero == FALSE)
 			return direction;
+
 		if(abs(direction) < 2*inc)
 			direction = 0;
 		if(direction > 0)
@@ -554,10 +599,20 @@ GLfloat procDirIn(GLfloat direction, unsigned char keyPlus, unsigned char keyMin
 
 
 	if(keystate[keyPlus] == TRUE && direction < max) // Increment if we need to go up
-		direction += inc;
+	{
+		if(direction < 0)
+			direction += 2*inc;
+		else
+			direction += inc;
+	}
 
 	if(keystate[keyMinus] == TRUE && direction > -max) // Decrement if we need to go down
-		direction -= inc;
+	{
+		if(direction > 0)
+			direction -= 2*inc;
+		else
+			direction -= inc;
+	}
 
 	return direction;
 }
@@ -702,7 +757,7 @@ void passiveMouse(int x, int y)
 
 	mouseX = (GLfloat)x/(GLfloat)windowWidth;
 	mouseY = (GLfloat)y/(GLfloat)windowHeight;
-//	printf("x: %f, y:%f\n", mouseX, mouseY);
+	printf("x: %f, y:%f\n", mouseX, mouseY);
 }
 
 void reshape(int width, int height)
@@ -717,7 +772,36 @@ void reshape(int width, int height)
 
 	glViewport(0,0,windowWidth, windowHeight);
 
-	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 1000.0); /* Set up the field of view as perspective */
+	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 4000.0); /* Set up the field of view as perspective */
 	glMatrixMode(GL_MODELVIEW);
 	//	initGl();
 }
+
+void loadTexture(GLuint texture, char *filename)
+{
+	Image *img;
+
+	img = loadBMP(filename);
+
+	glEnable(GL_TEXTURE);
+
+	glBindTexture(GL_TEXTURE_2D, texture);
+
+//   glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+
+	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+
+//	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, img->width -1, img->height -1, 0, GL_RGB, GL_UNSIGNED_BYTE, img->pixels);
+
+	gluBuild2DMipmaps(GL_TEXTURE_2D, 3, img->width, img->height, GL_RGB, GL_UNSIGNED_BYTE, img->pixels);
+
+	glDisable(GL_TEXTURE);
+}
+
+
+
