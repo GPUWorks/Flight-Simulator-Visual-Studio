@@ -11,6 +11,7 @@
 #include "mesh.h"
 #include "imageloader.h"
 #include <Xinput.h>
+#pragma comment(lib, "XInput.lib")
 
 typedef struct
 {
@@ -36,13 +37,16 @@ enum ringMovement
 {
 	still,
 	horizontal,
-	vertical
+	vertical,
+	spinClock,
+	spinAntiClock
 };
 
 typedef struct ringList ringList;
 struct ringList
 {
 	vector3d position;
+	GLfloat angle;
 	enum ringMovement movement;
 	int direction;
 	ringList *next;
@@ -51,7 +55,10 @@ struct ringList
 typedef enum
 {
 	behind,
-	cockpit
+	cockpit,
+	above,
+	rightSide,
+	leftSide,
 } viewpoint;
 
 /* Opengl functions */
@@ -69,9 +76,11 @@ void reshape(int width, int height);
 int **readInput(char* filename, mapParams *levelParameters, int position);
 ringList *arrayToLinkedList(int **posMap, int **stateMap, mapParams *params);
 void storeRing(ringList **ringToProc,vector3d ringPos, int ringState);
+void mapsToLinkedLists(void);
+void freeLinkedList(ringList *list);
 
 /* Velocity/position/force functions */
-void adjForce(int up, int down);
+void mouseAdjForce(int up, int down);
 void calculatePosition(int x);
 
 /* Vector math functions */
@@ -90,10 +99,11 @@ GLfloat det2(GLfloat a, GLfloat b, GLfloat c, GLfloat d);
 GLfloat coordAvg2(const GLfloat *vertices, int even);
 
 /* Human input processing functions */
-GLfloat procDirIn(GLfloat direction, int up, int down, GLfloat max, GLfloat inc, unsigned int retToZero);
+GLfloat procKeybDir(GLfloat direction, int up, int down, GLfloat max, GLfloat inc, GLfloat multiplier, unsigned int retToZero);
+GLfloat procControllerDir(GLfloat direction, GLfloat position, GLfloat max, GLfloat maxInc);
 
 /* Collision detection functions */
-int ringCollDetect(vector3d centre);
+int ringCollDetect(vector3d centre, GLfloat angle);
 int planeCollDetect(GLfloat *vertices, vector3d planePos);
 
 /* Drawing functions */
@@ -101,8 +111,8 @@ void drawAxis(void);
 void renderText(char *string, GLfloat x, GLfloat y, int centred);
 
 /* Menu functions */
-void drawMenu(char *item1, char *item2, char*item3, int activeItem);
-void printItem(char *item, const GLfloat *vertices, int activeItem);
+void drawMenu(char *item1, char *item2, char*item3, int button1, int button2, int button3, int activeItem);
+void printItem(char *item, int button, const GLfloat *vertices, int activeItem);
 int findCurMenuBox(void);
 int checkMenuBox(const GLfloat *vertices);
 
@@ -119,8 +129,23 @@ void nextLevel(void);
 void setWalls(void);
 void moveRings(void);
 
+/* Controller functions */
+int controllerConnected(int portNo);
+int detectController(void);
+void getControllerState(int portNo);
+float setThumbValue(short rawVal, int deadZone);
+void controllerAdjForce(GLfloat accelerate, GLfloat brake);
+void vibrateController(int leftSpeed, int rightSpeed, int duration, int portNo);
+void stopVibrating(int portNo);
 
-
+/* Controller variables */
+int controllerDetected;
+int controllerPort;
+int controllerMode;
+WORD controllerButtons;
+float controllerLTrig, controllerRTrig, controllerLThumbX, controllerLThumbY, controllerRThumbX, controllerRThumbY;
+const int deadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+const GLfloat controllerMaxDirInc = 0.5;
 
 /* Variables relating to the ring arrays/linked lists */
 //int totalRows, totalCols;
@@ -128,12 +153,23 @@ void moveRings(void);
 //GLfloat midpoint;
 ringList *firstRing;
 ringList *currentRing;
+const GLfloat ringSpinInc = 1;
+
+/* Variables relating to difficulty */
+#define NO_DIFF_SETTINGS 3
+#define EASY 0
+#define MEDIUM 1
+#define HARD 2
+int currentDiff = 1;
 
 /* Variables relating to levels */
 #define NO_LEVELS 2
-ringList *initialRing[NO_LEVELS];
+ringList *initialRing[NO_LEVELS] = {0};
 int currentLevel;
 mapParams levelParams[NO_LEVELS];
+
+int **posMaps[NO_LEVELS]; /* Pointer to the level map array */
+int **stateMaps[NO_LEVELS];
 
 /* Keyboard state variables */
 
@@ -169,20 +205,19 @@ const float radsToDegs (180.0/3.141592654);
 const float degsToRads (3.141592654/180.0);
 
 /* Scaling factors to convert array to real space */
-const vector3d dirSclr = {100,15,25};
+const vector3d dirSclr[NO_DIFF_SETTINGS] = { {400,15,25}, {100,(15/2),(25/2)}, {50,(15/4),(25/4)} };
 
 /* Constants to define how far wall is from real edge */
 const vector3d dirMargin = {3.5,5,6};
 
 /* Postition of the plane */
-const vector3d initialPos = {-80,30,0};
 vector3d pos; 
 
 /* Amount to incrememnt the position when the input is processed */
 const GLfloat posInc = 0.05;
 
 /* Amount to move a ring by */
-const GLfloat ringInc = 0.5;
+const GLfloat ringInc = 0.1;
 
 /* Light parameters */
 const GLfloat lightParam[2][4] = { {0.1,0.1,0.1,0.0},	//Ambient light - value is intensity
@@ -200,8 +235,8 @@ const GLfloat fogEndDepth = 0.05;
 /* Torus parameters */
 const GLint torusSides = 5;
 const GLint torusRings = 20;
-const GLfloat torusOuterRad = 8.0;
-const GLfloat torusInnerRad = 1;
+const GLfloat torusOuterRad[NO_DIFF_SETTINGS] = {20.0, 5.0, 3.0};
+const GLfloat torusInnerRad[NO_DIFF_SETTINGS] = {torusOuterRad[0]/8, torusOuterRad[1]/8, torusOuterRad[2]/8};
 
 /* Wall parameters */
 GLfloat leftWallVertices[12];
@@ -222,15 +257,24 @@ GLfloat floorTexCoords[8];
 GLfloat force = 0; // Force output by the planes engine
 GLfloat yAng = 0; // Angle ship rotates around y axis (yaw)
 
-vector3d direction = {0,0,0}, velocity= {0,0,0}, normalisedDir = {1,0,0};
+vector3d direction = {0,0,0}, velocity= {0,0,0}, normalisedVelocity = {0,0,0}, normalisedDir = {1,0,0};
+
+const GLfloat maxDir = 2.0;
+const GLfloat controllerPosInc = 0.5;
+const GLfloat keybPosInc = 0.1;
+const GLfloat maxYawAngle = 45.0;
+const GLfloat yawAngleInc = 1.0;
 
 /* Constants to define if a quantity should be increased or decreased */
 #define UP 1
 #define DOWN 0
 
-const GLfloat maxForce = 10000;
+const GLfloat maxForce[NO_DIFF_SETTINGS] = {250, 500,1000};
 const GLfloat forceIncrement = 100;
-const GLfloat airResistanceCoefficient = 0.1;
+const GLfloat airResistanceCoefficient = 0.005;
+const GLfloat autopilotForce = 300;
+const GLfloat brakeCoefficient = 0.5;
+
 const unsigned int delay = 10;
 
 /* Mesh and texture stuff */
@@ -267,6 +311,14 @@ const GLfloat endTexSize = 1;
 #endif
 
 /* Parameters for the menu */
+typedef enum {
+	off,
+	normal,
+	difficulty,
+} menuTypes;
+
+menuTypes menuMode = normal;
+
 const GLfloat boxWidth = 0.5;
 const GLfloat boxHeight = 0.2;
 
@@ -290,7 +342,10 @@ const GLfloat box3Coords[8] = { 0.0 - boxWidth/2.0 , 0.0 - boxHeight*1.5,
 /* Other stuff */
 #define NO_LIVES 3
 
-int showMenu = FALSE;
+const int maxVibration = 65535;
+int vibrationLatch = FALSE;
+
+
 int score = 0;
 int lives = 3;
 int gameOver = FALSE;
@@ -303,22 +358,23 @@ int main(int argc, char **argv)
 {
 //	printf("Vendor: %s\nRenderer: %s\nVersion: %s\nExtensions: %s\n",(const char*)glGetString( GL_VENDOR),(const char*)glGetString( GL_RENDERER),(const char*)glGetString( GL_VERSION),(const char*)glGetString( GL_EXTENSIONS));
 
-	/* Read levels */
+	detectController();
+	controllerMode = FALSE;
 
-	int **currentPosMap; /* Pointer to the level map array */
-	int **currentStateMap;
+
+
+	/* Read levels */
 
 	int i;
 	char buf[100];
-//	char stateBuf[100];
 	for(i=0; i<NO_LEVELS; i++)
 	{
 		sprintf(buf,"level%d.txt",i);
-//		sprintf(stateBuf,"levelState%d.txt",i);
-		currentPosMap = readInput(buf, &levelParams[i], TRUE);
-		currentStateMap = readInput(buf, &levelParams[i], FALSE);
-		initialRing[i] = arrayToLinkedList(currentPosMap, currentStateMap, &levelParams[i]);
+		posMaps[i] = readInput(buf, &levelParams[i], TRUE);
+		stateMaps[i] = readInput(buf, &levelParams[i], FALSE);
 	}
+
+	mapsToLinkedLists();
 
 	currentLevel = 0;
 
@@ -366,7 +422,8 @@ void initGl(void)
 {
 	reshape(windowWidth, windowHeight); /* Set up field of view */
 
-	glClearColor (0.529, 0.808, 0.980, 1.0); /* Set background colour to blue */
+//	glClearColor (0.529, 0.808, 0.980, 1.0); /* Set background colour to blue */
+	glClearColor (0.596, 0.690, 0.823, 1.0); /* Set background colour to blue */
 
 	glLineWidth(5.0); // Line width as 5 if we need to draw some lines (i.e for drawing the axis)
 
@@ -423,23 +480,41 @@ void display(void)
 			break;
 
 		case cockpit:
-			gluLookAt(planeMax.x,0,0, 1,0,0, 0,1,0); // Normal ("behind") camera view
+			gluLookAt(planeMax.x,0,0, 1,0,0, 0,1,0);
 			break;
+
+		case above:
+			gluLookAt(-5,5,0, 1,0,0, 0,1,0);
+			break;
+
+		case rightSide:
+			gluLookAt(-5,0,5, 1,0,0, 0,1,0);
+			break;
+
+		case leftSide:
+			gluLookAt(-5,0,-5, 1,0,0, 0,1,0);
+			break;
+
+
 	}
 
 	glRotatef(-yAng,0.0,1.0,0.0); // Rotate the viewpoint for the yaw rotation of the plane
 
 	/* If the mouse is being used to rotate the camera, process that */
-	static vector2d mouseRotation = {0,0}; // Store the mouse rotation - allows the rotation to be latched
-	if(mouseAction == view && cameraAngle == behind)
+	static vector2d rotation = {0,0}; // Store the mouse rotation - allows the rotation to be latched
+	if( (mouseAction == view || controllerMode) && cameraAngle == behind)
 	{
-		if(mouseViewLatch == FALSE)
+		if(controllerMode)
 		{
-			mouseRotation.x = -45.0+90*mousePos.x;
-			mouseRotation.y = -45.0+90*mousePos.y;
+			rotation.x = controllerRThumbX * 45.0;
+			rotation.y = controllerRThumbY * 45.0;
+		} else if(mouseViewLatch == FALSE)
+		{
+			rotation.x = -45.0+90*mousePos.x;
+			rotation.y = -45.0+90*mousePos.y;
 		}
-		glRotatef(mouseRotation.x,0.0,1.0,0.0);
-		glRotatef(mouseRotation.y,0.0,0.0,1.0);
+		glRotatef(rotation.x,0.0,1.0,0.0);
+		glRotatef(rotation.y,0.0,0.0,1.0);
 	}
 
 	/* Translate to the current viewpoint */
@@ -475,8 +550,8 @@ void display(void)
 	{
 		glPushMatrix();
 		glTranslatef(nextToDraw->position.x,nextToDraw->position.y, nextToDraw->position.z); /* Distance then height then left/right */
-		glRotatef(90.0,0.0,1.0,0.0);
-		glutSolidTorus(torusInnerRad,torusOuterRad,torusSides,torusRings);
+		glRotatef(90.0 + nextToDraw->angle,0.0,1.0,0.0);
+		glutSolidTorus(torusInnerRad[currentDiff],torusOuterRad[currentDiff],torusSides,torusRings);
 		glPopMatrix();
 
 		glColor3f(0.0,0.0,1.0); // Draw remaining rings in green
@@ -539,10 +614,25 @@ void display(void)
 	glMatrixMode( GL_PROJECTION ) ;
 	glPopMatrix() ;
 	glMatrixMode( GL_MODELVIEW ) ;
-//	glPopMatrix() ;
 
-	if(showMenu == TRUE)
-		drawMenu("New Game", "Exit", NULL, findCurMenuBox());
+	switch(menuMode)
+	{
+		case normal:
+		if(gameOver)
+			drawMenu("Game over", "New Game", "Exit", FALSE, TRUE, TRUE, findCurMenuBox());
+		else if(pause)
+			drawMenu("Paused", "New Game", "Exit", FALSE, TRUE, TRUE, findCurMenuBox());
+		else
+			drawMenu("Welcome!", "New Game", "Exit", FALSE, TRUE, TRUE, findCurMenuBox());
+		break;
+
+		case difficulty:
+		drawMenu("Easy", "Medium", "Hard", TRUE, TRUE, TRUE, findCurMenuBox());
+		break;
+
+		default:
+			break;
+	}
 	
 	glFlush(); /* Execute all isssued commands */
 
@@ -554,19 +644,40 @@ void mouse(int button, int state, int x, int y)
 	printf("MOUSE! %d\n", button);
 	if(button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
 	{
-		if(showMenu == TRUE)
+		if(menuMode == normal)
 		{
 			switch(findCurMenuBox())
 			{
-				case 1:
-					newGame(FALSE, TRUE);
-					break;
 				case 2:
+					menuMode = difficulty;
+					break;
+				case 3:
 					exit(EXIT_SUCCESS);
 					break;
 				default:
 					break;
 			}
+
+		} else if(menuMode == difficulty)
+		{
+			switch(findCurMenuBox())
+			{
+				case 1:
+					currentDiff = EASY;
+					newGame(FALSE, TRUE);
+					break;
+				case 2:
+					currentDiff = MEDIUM;
+					newGame(FALSE, TRUE);
+					break;
+				case 3:
+					currentDiff = HARD;
+					newGame(FALSE, TRUE);
+					break;
+				default:
+					break;
+			}
+			
 
 		} else {
 			mouseViewLatch = !mouseViewLatch;
@@ -622,7 +733,7 @@ int **readInput(char* filename, mapParams *levelParameters, int position)
 				do
 				{
 					c = fgetc(filePtr);
-				} while( c != 'S' && c != 'H' && c != 'V');
+				} while( c != 'S' && c != 'H' && c != 'V' && c != 'C' && c != 'A');
 
 				map[i][j] = c;
 			}
@@ -631,9 +742,21 @@ int **readInput(char* filename, mapParams *levelParameters, int position)
 	return map;
 }
 
-
-void adjForce(int up, int down)
+void controllerAdjForce(GLfloat accelerate, GLfloat brake)
 {
+
+	force = (accelerate - brakeCoefficient*brake);
+	vibrateController(force*maxVibration, 0, -1, controllerPort); // Low freq - engine
+	force *= maxForce[currentDiff];
+	if(normalisedVelocity.x < 0)
+		force = 0;
+	return;
+}
+
+void mouseAdjForce(int up, int down)
+{
+
+
 	if(up == down)
 	{
 		if(force > 0)
@@ -645,12 +768,15 @@ void adjForce(int up, int down)
 
 	if(up)
 	{
-		if(force < maxForce)
+		if(force < maxForce[currentDiff])
 			force += forceIncrement;
 	} else {
-		if(force > 0)
+		if(force > -maxForce[currentDiff] )
 			force -= 2*forceIncrement;
 	}
+
+	if(normalisedVelocity.x < 0)
+		force = 0;
 //	printf("Force: %f\n", force);
 }
 
@@ -662,7 +788,7 @@ void calculatePosition(void)
 
 	GLfloat velocityMagnitude = vectorMag(velocity);
 
-	if(velocity.x >= 0)
+	if(normalisedVelocity.x >= 0)
 		acceleration= force - airResistanceCoefficient*velocityMagnitude*velocityMagnitude;
 	else
 		acceleration= force + airResistanceCoefficient*velocityMagnitude*velocityMagnitude;
@@ -674,6 +800,8 @@ void calculatePosition(void)
 	vector3d rotatedDir = rotateAboutY(normalisedDir, yAng);
 
 	velocity = vectorConstMult(rotatedDir, velocityMagnitude);
+
+	normalisedVelocity = rotateAboutY(velocity, -yAng);
 
 	pos = vectorAdd(pos, vectorConstMult(velocity,delayInSeconds) );
 
@@ -708,7 +836,7 @@ void timer(int x)
 	static ringList *lastCollision = NULL;
 	if(currentRing!= NULL && lastCollision != currentRing)
 		{
-			if(ringCollDetect(currentRing->position) == TRUE) // Detect a collision with the ring
+			if(ringCollDetect(currentRing->position, currentRing->angle) == TRUE) // Detect a collision with the ring
 				lastCollision = currentRing;
 		}
 
@@ -724,32 +852,45 @@ void timer(int x)
 		gameOver = TRUE;
 	if( planeCollDetect(backWallVertices, maxPos) == TRUE)
 		nextLevel();
-//		gameOver = TRUE;
 
+	/* Sort out what to do if dead etc. */
 	if(lives == 0)
 		gameOver = TRUE;
 
 	if(gameOver)
 	{
+		stopVibrating(controllerPort);
 		pause = TRUE;
 		puts("Game Over");
 		if(autopilot)
 			newGame(TRUE,TRUE);
-		showMenu = TRUE;
+		menuMode = normal;
 		glutTimerFunc(delay, timer, 0);
 		return;
 	}
 
-	moveRings();
+	getControllerState(controllerPort); // Update which buttons are pressed etc.
+
+	if(keystate['g'] == TRUE && keyToggle['g'] == TRUE) // Toggle gamepad
+	{
+		keyToggle['g'] = FALSE;
+		controllerMode = !controllerMode;
+	}
 
 	/* Process key presses */
 	direction.x = 1;
 
-	if(keystate['p'] == TRUE && keyToggle['p'] == TRUE) // Toggle pause
+	static int startPrevState = FALSE;
+	if(keystate['p'] == TRUE && keyToggle['p'] == TRUE || controllerButtons & XINPUT_GAMEPAD_START && startPrevState == FALSE) // Toggle pause
 	{
 		keyToggle['p'] = FALSE;
 		pause = !pause;
+		if(pause)
+			menuMode = normal;
+		else
+			menuMode = off;
 	}
+	startPrevState = controllerButtons & XINPUT_GAMEPAD_START;
 
 	if(keystate['q'] == TRUE && keyToggle['q'] == TRUE) // Toggle autopilot
 	{
@@ -781,7 +922,8 @@ void timer(int x)
 		}
 	}
 
-	if(keystate['v'] == TRUE && keyToggle['v'] == TRUE) // Toggle mouse control
+	static int YPrevState = FALSE;
+	if(keystate['v'] == TRUE && keyToggle['v'] == TRUE || controllerButtons & XINPUT_GAMEPAD_Y && YPrevState == FALSE) // Toggle view point
 	{
 		keyToggle['v'] = FALSE;
 		switch(cameraAngle)
@@ -791,6 +933,18 @@ void timer(int x)
 				break;
 
 			case cockpit:
+				cameraAngle = above;
+				break;
+
+			case above:
+				cameraAngle = leftSide;
+				break;
+
+			case leftSide:
+				cameraAngle = rightSide;
+				break;
+
+			case rightSide:
 				cameraAngle = behind;
 				break;
 
@@ -800,9 +954,10 @@ void timer(int x)
 				break;
 		}
 	}
+	YPrevState = controllerButtons & XINPUT_GAMEPAD_Y;
 
-
-	if(keystate['f'] == TRUE && keyToggle['f'] == TRUE) // Toggle fog
+	static int XPrevState = FALSE;
+	if(keystate['f'] == TRUE && keyToggle['f'] == TRUE || controllerButtons & XINPUT_GAMEPAD_X && XPrevState == FALSE) // Toggle fog
 	{
 		keyToggle['f'] = FALSE;
 		fogState = ! fogState;
@@ -812,30 +967,27 @@ void timer(int x)
 		else
 			glDisable(GL_FOG);
 	}
+	XPrevState = controllerButtons & XINPUT_GAMEPAD_X;
 
 	if(pause)
 	{
 		glutTimerFunc(delay, timer, 0);
 		return;
 	}
+	moveRings(); // Move the rings
 
-	adjForce(keystate['o'], keystate['l']);
-
-//	/* Process new position */
-//	if(keystate['o'] == TRUE)
-//		adjForce(UP);
-	
-//	if(keystate['l'] == TRUE)
-//		adjForce(DOWN);
-
+	if(controllerMode)
+		controllerAdjForce(controllerRTrig, controllerLTrig);
+	else
+		mouseAdjForce(keystate['o'], keystate['l']);
 
 	if(autopilot == TRUE)
 	{
-		force = 5000;
+		force = autopilotForce;
 
 		if(currentRing != NULL)
 		{
-			if(pos.x > currentRing->position.x - torusInnerRad)
+			if(pos.x > currentRing->position.x - torusInnerRad[currentDiff])
 			{
 				if(currentRing ->next != NULL)
 					direction = vectorAdd(currentRing->next->position, vectorInvert(pos));
@@ -854,25 +1006,27 @@ void timer(int x)
 		}
 
 
-//			else if(currentRing->next != NULL)
-//		{
-//			direction = vectorAdd(currentRing->next->position, vectorInvert(pos));
-//		}
-
-	}
-
-
-	else if(mouseAction == control)
+	} else if(controllerMode)
+	{
+		direction.z = procControllerDir(direction.z, controllerLThumbX, maxDir, controllerPosInc);
+		direction.y = procControllerDir(direction.y, controllerLThumbY, maxDir, controllerPosInc);
+	} else if(mouseAction == control)
 	{
 		direction.z = -5.0f + 10.0f*mousePos.x;
 		direction.y = 5.0f - 10.0f*mousePos.y;
 	} else {
-		direction.y = procDirIn(direction.y, keystate['w'], keystate['s'], 5.0, posInc, TRUE);
-		direction.z = procDirIn(direction.z, keystate['d'], keystate['a'], 5.0, posInc, TRUE);
+		direction.y = procKeybDir(direction.y, keystate['w'], keystate['s'], maxDir, keybPosInc, 1, TRUE);
+		direction.z = procKeybDir(direction.z, keystate['d'], keystate['a'], maxDir, keybPosInc, 1, TRUE);
 	}
 
-	yAng = procDirIn(yAng, keystate['i'],keystate['k'], 45.0, 1.0, TRUE);
-
+	int left, right; 
+	if(controllerMode)
+	{
+		controllerButtons & XINPUT_GAMEPAD_LEFT_SHOULDER ? 	left = TRUE: left = FALSE;
+		controllerButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER ? right = TRUE: right = FALSE;
+		yAng = procKeybDir(yAng, left, right, maxYawAngle, yawAngleInc, 1, FALSE);
+	} else
+		yAng = procKeybDir(yAng, keystate['i'],keystate['k'], maxYawAngle, yawAngleInc, 1, FALSE);
 
 //	printf("direction: x:%f, y:%f, z:%f\nvelocity: x:%f, y:%f, z:%f\npos: x:%f, y:%f, z:%f\nyAng: %f\n",direction.x,direction.y,direction.z, velocity.x,velocity.y, velocity.z,pos.x,pos.y,pos.z,yAng);
 
@@ -881,7 +1035,7 @@ void timer(int x)
 	/* Check if we are passed the current ring, if so move to the next */
 	if(currentRing != NULL)
 	{
-		if(currentRing->position.x + torusInnerRad < pos.x + planeMin.x) // If we are passed the ring
+		if(currentRing->position.x + torusInnerRad[currentDiff] < pos.x + planeMin.x) // If we are passed the ring
 			currentRing = currentRing->next;
 	}
 	
@@ -937,7 +1091,7 @@ vector3d vectorAdd(vector3d vector1, vector3d vector2)
 }
 
 
-GLfloat procDirIn(GLfloat direction, int up, int down, GLfloat max, GLfloat inc, unsigned int retToZero)
+GLfloat procKeybDir(GLfloat direction, int up, int down, GLfloat max, GLfloat inc, GLfloat multiplier, unsigned int retToZero)
 {
 	if(up == down) // If both "up" and "down" keys are held return to zero.
 	{
@@ -956,30 +1110,30 @@ GLfloat procDirIn(GLfloat direction, int up, int down, GLfloat max, GLfloat inc,
 	if(up == TRUE && direction < max) // Increment if we need to go up
 	{
 		if(direction < 0)
-			direction += 2*inc;
+			direction += 2*multiplier*inc;
 		else
-			direction += inc;
+			direction += multiplier*inc;
 	}
 
 	if(down == TRUE && direction > -max) // Decrement if we need to go down
 	{
 		if(direction > 0)
-			direction -= 2*inc;
+			direction -= 2*multiplier*inc;
 		else
-			direction -= inc;
+			direction -= multiplier*inc;
 	}
 
 	return direction;
 }
 
-int ringCollDetect(vector3d centre)
+int ringCollDetect(vector3d centre, GLfloat angle)
 {
-
-	const GLfloat torusTotal = torusOuterRad+torusInnerRad;
-	const GLfloat torusGap = torusOuterRad-torusInnerRad;
+	vector3d relativePlanePos;
+	const GLfloat torusTotal = torusOuterRad[currentDiff]+torusInnerRad[currentDiff];
+	const GLfloat torusGap = torusOuterRad[currentDiff]-torusInnerRad[currentDiff];
 
 	/* Check if inside */
-	if(pos.x + planeMax.x > centre.x - torusInnerRad && pos.x + planeMin.x < centre.x + torusInnerRad)
+	if(pos.x + planeMax.x > centre.x - torusInnerRad[currentDiff] && pos.x + planeMin.x < centre.x + torusInnerRad[currentDiff])
 	{
 		if(pos.z + planeMin.z < centre.z + torusTotal && pos.z + planeMax.z > centre.z - torusTotal )
 		{
@@ -993,6 +1147,9 @@ int ringCollDetect(vector3d centre)
 				{
 					score--;
 					lives--;
+					
+					if(controllerMode)
+						vibrateController(0, maxVibration, 1000, controllerPort); // high freq - lost life
 //					printf("Collided.\n");
 				}
 				return TRUE;
@@ -1064,7 +1221,7 @@ void idle(void)
 
 	if(currentRing != NULL)
 	{
-		if(currentRing->position.x + torusInnerRad < pos.x + planeMin.x) // If we are passed the ring
+		if(currentRing->position.x + torusInnerRad[currentDiff] < pos.x + planeMin.x) // If we are passed the ring
 			currentRing = currentRing->next;
 	}
 
@@ -1137,7 +1294,7 @@ void reshape(int width, int height)
 
 	glViewport(0,0,windowWidth, windowHeight);
 
-	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 4000.0); /* Set up the field of view as perspective */
+	gluPerspective(45.0, (GLdouble)windowWidth/(GLdouble)windowHeight, 1.0, 20000.0); /* Set up the field of view as perspective */
 	glMatrixMode(GL_MODELVIEW);
 }
 
@@ -1207,13 +1364,13 @@ ringList *arrayToLinkedList(int **posMap, int **stateMap, mapParams *params)
 	/* Loop across all rows */
 	for(i=0; i < params->rows; i++)
 	{
-		ringPos.x = (GLfloat)(dirSclr.x*(i+1));
+		ringPos.x = (GLfloat)(dirSclr[currentDiff].x*(i+1));
 		for(j=0; j < params->cols; j++)
 		{
 			if(posMap[i][j] != 0) // i.e if there is a ring in the space
 			{
-				ringPos.y = (GLfloat)(dirSclr.y*posMap[i][j])/(GLfloat)3.0;
-				ringPos.z = dirSclr.z*(j - midpoint);
+				ringPos.y = (GLfloat)(dirSclr[currentDiff].y*posMap[i][j])/(GLfloat)3.0;
+				ringPos.z = dirSclr[currentDiff].z*(j - midpoint);
 
 				if(ringPos.y > params->height)
 					params->height = ringPos.y;
@@ -1246,6 +1403,7 @@ void storeRing(ringList **ringToProc,vector3d ringPos, int ringState)
 	(*ringToProc)->next = NULL;
 	(*ringToProc)->position = ringPos;
 	(*ringToProc)->direction = TRUE;
+	(*ringToProc)->angle = 0;
 	switch(ringState)
 	{
 		case 'S':
@@ -1258,6 +1416,14 @@ void storeRing(ringList **ringToProc,vector3d ringPos, int ringState)
 
 		case 'V':
 			(*ringToProc)->movement = vertical;
+			break;
+
+		case 'C':
+			(*ringToProc)->movement = spinClock;
+			break;
+
+		case 'A':
+			(*ringToProc)->movement = spinAntiClock;
 			break;
 
 		default:
@@ -1317,7 +1483,7 @@ vector3d set3DVector(GLfloat a, GLfloat b, GLfloat c)
 	return vect;
 }
 
-void drawMenu(char *item1, char *item2, char*item3, int activeItem)
+void drawMenu(char *item1, char *item2, char*item3, int button1, int button2, int button3, int activeItem)
 {
 	glMatrixMode( GL_PROJECTION );
 	glPushMatrix();
@@ -1331,11 +1497,11 @@ void drawMenu(char *item1, char *item2, char*item3, int activeItem)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); 
 
 
-	printItem(item1, box1Coords, activeItem == 1);
+	printItem(item1, button1, box1Coords, activeItem == 1);
 
-	printItem(item2, box2Coords, activeItem == 2);
+	printItem(item2, button2, box2Coords, activeItem == 2);
 
-	printItem(item3, box3Coords, activeItem == 3);
+	printItem(item3, button3, box3Coords, activeItem == 3);
 
 	glDisable(GL_BLEND);
 	glEnable(GL_LIGHTING);
@@ -1347,14 +1513,22 @@ void drawMenu(char *item1, char *item2, char*item3, int activeItem)
 
 }
 
-void printItem(char *item, const GLfloat *vertices, int activeItem)
+
+
+void printItem(char *item, int button, const GLfloat *vertices, int activeItem)
 {
 	if(item != NULL)
 	{
-		if(activeItem == TRUE)
-			glColor4f(1.0,0.0,0.0,0.7);
-		else
-			glColor4f(0.0,0.0,1.0,0.7);
+		if(button)
+		{
+			if(activeItem == TRUE)
+				glColor4f(1.0,0.0,0.0,0.7);
+			else
+				glColor4f(0.0,0.0,1.0,0.7);
+		} else {
+				glColor4f(0.0,1.0,0.0,0.7);
+		}
+
 		glVertexPointer(2,GL_FLOAT,0,vertices);
 		glDrawArrays(GL_POLYGON,0,4);
 		renderText(item,coordAvg2(vertices,TRUE),coordAvg2(vertices,FALSE), TRUE);
@@ -1405,23 +1579,39 @@ void newGame(int computerGame, int reset)
 		lives = NO_LIVES;
 		score = currentLevel = 0;
 	}
-	pos = initialPos;
+
+	mapsToLinkedLists();
 	currentRing = firstRing = initialRing[currentLevel];
+
+/*
+	setCoordArray(frontWallVertices, xLwrBnd, yLwrBnd, zLwrBnd,
+		                             xLwrBnd, yLwrBnd, zUprBnd,
+		                             xLwrBnd, yUprBnd, zUprBnd,
+		                             xLwrBnd, yUprBnd, zLwrBnd);
+*/
+
 	gameOver = pause = mouseViewLatch = fogState =FALSE;
 	mouseAction = none;
-
-	
-	
 
 	timeOffset = elapsedTime;
 	elapsedTime = 0;
 
 	if(computerGame)
-		showMenu = autopilot = TRUE;
+	{
+		menuMode = normal;
+		autopilot = TRUE;
+	}
 	else
-		showMenu = autopilot = FALSE;
+	{
+		menuMode = off;
+		autopilot = FALSE;
+	}
 
 	setWalls();
+
+	pos.x = (currentRing->position.x + frontWallVertices[0])/2.0;
+	pos.y = (frontWallVertices[1] + frontWallVertices[7])/2.0;
+	pos.z = (frontWallVertices[2] + frontWallVertices[8])/2.0;
 }
 
 /* Generate checker pattern, adapted from http://www.csc.villanova.edu/~mdamian/Past/graphicsS13/notes/GLTextures/Checkerboard.htm */
@@ -1458,21 +1648,24 @@ void loadCheckerTexData(void)
 void nextLevel(void)
 {
 	if(currentLevel < NO_LEVELS - 1)
+	{
 		currentLevel++;
-	else
+		newGame(autopilot, FALSE);
+	} else {
 		currentLevel = 0;
-	newGame(autopilot, FALSE);
+		gameOver = TRUE;
+	}
 }
 
 void setWalls(void)
 {
 		/* Set up parameters for the walls */
 	GLfloat midpoint = (GLfloat)(levelParams[currentLevel].cols -1)/2.0;
-	GLfloat xUprBnd = (GLfloat)(dirSclr.x* (levelParams[currentLevel].rows + dirMargin.x));
-	GLfloat xLwrBnd = -dirSclr.x*dirMargin.x;
-	GLfloat yUprBnd = ((GLfloat)levelParams[currentLevel].height + dirSclr.y*dirMargin.y );
-	GLfloat yLwrBnd = -(torusOuterRad + dirMargin.y*dirSclr.y);
-	GLfloat zUprBnd = dirSclr.z*(dirMargin.z + midpoint) + torusOuterRad;
+	GLfloat xUprBnd = (GLfloat)(dirSclr[currentDiff].x* (levelParams[currentLevel].rows + dirMargin.x));
+	GLfloat xLwrBnd = -dirSclr[currentDiff].x*dirMargin.x;
+	GLfloat yUprBnd = ((GLfloat)levelParams[currentLevel].height + dirSclr[currentDiff].y*dirMargin.y );
+	GLfloat yLwrBnd = -(torusOuterRad[currentDiff] + dirMargin.y*dirSclr[currentDiff].y);
+	GLfloat zUprBnd = dirSclr[currentDiff].z*(dirMargin.z + midpoint) + torusOuterRad[currentDiff];
 	GLfloat zLwrBnd = -zUprBnd;
 
 	GLfloat sideHeight = wallTexSize;
@@ -1546,7 +1739,7 @@ void setWalls(void)
 
 void moveRings(void)
 {
-	GLfloat zLimit = (GLfloat)(levelParams[currentLevel].cols * dirSclr.z)/2.0;
+	GLfloat zLimit = (GLfloat)(levelParams[currentLevel].cols * dirSclr[currentDiff].z)/2.0;
 	GLfloat yLimit = (GLfloat)(levelParams[currentLevel].height);
 
 	ringList *nextToProc;
@@ -1560,27 +1753,178 @@ void moveRings(void)
 			{
 				(nextToProc->position.z)+= ringInc;
 
-				if(nextToProc->position.z > zLimit - torusOuterRad)
+				if(nextToProc->position.z > zLimit - torusOuterRad[currentDiff])
 					nextToProc->direction = FALSE;
 			} else {
 				(nextToProc->position.z)-= ringInc;
 
-				if(nextToProc->position.z < -zLimit + torusOuterRad)
+				if(nextToProc->position.z < -zLimit + torusOuterRad[currentDiff])
 					nextToProc->direction = TRUE;
 			}
-		} else {
+		} else if(nextToProc->movement == vertical) {
 			if(nextToProc->direction == TRUE)
 			{
 				(nextToProc->position.y)+= ringInc;
 
-				if(nextToProc->position.y > yLimit - torusOuterRad)
+				if(nextToProc->position.y > yLimit - torusOuterRad[currentDiff])
 					nextToProc->direction = FALSE;
 			} else {
 				(nextToProc->position.y)-= ringInc;
 
-				if(nextToProc->position.y < 0 + torusOuterRad)
+				if(nextToProc->position.y < 0 + torusOuterRad[currentDiff])
 					nextToProc->direction = TRUE;
 			}
+		} else if(nextToProc->movement == spinClock) {
+			nextToProc->angle += ringSpinInc;
+
+			if(nextToProc->angle >= 360.0)
+				nextToProc->angle -= 360.0;
 		}
+	}
+}
+
+/* Check single port for controller */
+int controllerConnected(int portNo)
+{
+	XINPUT_STATE controllerState;
+	ZeroMemory(&controllerState, sizeof(XINPUT_STATE)); // Zero the controller state
+
+	DWORD connected; // Technically not a C type but the whole library is c++ soooooo yeeeahhhh
+
+	connected = XInputGetState(portNo, &controllerState);
+
+	if(connected == ERROR_SUCCESS)
+		return TRUE;
+
+	return FALSE;
+}
+
+/* Check ALL the ports (and set global vars accordingly...) */
+int detectController(void)
+{
+	int portNo;
+
+	for(portNo = 0; portNo < 4; portNo++)
+	{
+		printf("Checking port %d \n", portNo);
+		if(controllerConnected(portNo))
+		{
+			printf("Controller detected on port %d \n", portNo);
+			controllerPort = portNo;
+			controllerDetected = TRUE;
+			return controllerDetected;
+		}
+	}
+
+	controllerDetected = FALSE;
+	return controllerDetected;
+
+}
+
+void getControllerState(int portNo)
+{
+	XINPUT_STATE controllerState;
+	ZeroMemory(&controllerState, sizeof(XINPUT_STATE)); // Zero the controller state
+
+	XInputGetState(portNo, &controllerState);
+
+	controllerButtons = controllerState.Gamepad.wButtons;
+
+	controllerLTrig = (float) controllerState.Gamepad.bLeftTrigger / 255.0;
+	controllerRTrig = (float) controllerState.Gamepad.bRightTrigger / 255.0;
+
+	controllerLThumbX = setThumbValue(controllerState.Gamepad.sThumbLX, deadZone);
+	controllerLThumbY = setThumbValue(controllerState.Gamepad.sThumbLY, deadZone);
+
+	controllerRThumbX = setThumbValue(controllerState.Gamepad.sThumbRX, deadZone);
+	controllerRThumbY = setThumbValue(controllerState.Gamepad.sThumbRY, deadZone);
+
+}
+
+float setThumbValue(short rawVal, int deadZone)
+{
+	/*	Range is -32768 to 32767 */
+	
+	if( (rawVal < deadZone && rawVal >=0) || (rawVal > -deadZone && rawVal <=0) )
+		return 0.0;
+
+	if(rawVal > 0)
+		return (float)rawVal/32767.0;
+
+	return (float)rawVal/32768.0;
+
+}
+
+GLfloat procControllerDir(GLfloat direction, GLfloat position, GLfloat max, GLfloat maxInc)
+{
+
+	direction += (position - direction/max)*maxInc;
+
+	if(direction > max)
+		direction = max;
+	else if(direction < -max)
+		direction = -max;
+
+	return direction;
+}
+
+void vibrateController(int leftSpeed, int rightSpeed, int duration, int portNo)
+{
+	if(vibrationLatch)
+		return;
+
+    XINPUT_VIBRATION vibe; // vibration state
+    ZeroMemory(&vibe, sizeof(XINPUT_VIBRATION));
+
+    // Set the vibration values
+	if(leftSpeed >= 0)
+		vibe.wLeftMotorSpeed = leftSpeed;
+	if(rightSpeed >= 0)
+		vibe.wRightMotorSpeed = rightSpeed;
+
+    XInputSetState(portNo, &vibe); // send values to controller
+
+	if(duration >= 0)
+	{
+		glutTimerFunc(duration, stopVibrating, portNo);
+		vibrationLatch = TRUE;
+	}
+}
+
+void stopVibrating(int portNo)
+{
+    XINPUT_VIBRATION vibe; // vibration state
+    ZeroMemory(&vibe, sizeof(XINPUT_VIBRATION));
+
+    // Set the vibration values
+    vibe.wLeftMotorSpeed = 0;
+    vibe.wRightMotorSpeed = 0;
+
+    XInputSetState(portNo, &vibe); // send values to controller
+
+	vibrationLatch = FALSE;
+}
+
+void vibrateController(int leftSpeed, int rightSpeed, int duration, int portNo);
+void stopVibrating(int portNo);
+
+void mapsToLinkedLists(void)
+{
+	int i;
+	for(i=0; i< NO_LEVELS; i++)
+	{
+		freeLinkedList(initialRing[i]);
+		initialRing[i] = arrayToLinkedList(posMaps[i], stateMaps[i], &levelParams[i]);
+	}
+}
+
+void freeLinkedList(ringList *list)
+{
+	ringList *temp;
+	while(list != NULL)
+	{
+		temp = list;
+		list = list->next;
+		free(temp);
 	}
 }
