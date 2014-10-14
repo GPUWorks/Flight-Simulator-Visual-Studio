@@ -82,6 +82,7 @@ void freeLinkedList(ringList *list);
 /* Velocity/position/force functions */
 void mouseAdjForce(int up, int down);
 void calculatePosition(int x);
+void toggleTurbo(int x);
 
 /* Vector math functions */
 GLfloat vectorMag(vector3d vector);
@@ -142,6 +143,7 @@ void stopVibrating(int portNo);
 int controllerDetected;
 int controllerPort;
 int controllerMode;
+int controllerInvert;
 WORD controllerButtons;
 float controllerLTrig, controllerRTrig, controllerLThumbX, controllerLThumbY, controllerRThumbX, controllerRThumbY;
 const int deadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
@@ -154,6 +156,9 @@ const GLfloat controllerMaxDirInc = 0.5;
 ringList *firstRing;
 ringList *currentRing;
 const GLfloat ringSpinInc = 1;
+#define OUTSIDE 0
+#define INSIDE 1
+#define COLLIDED 2
 
 /* Variables relating to difficulty */
 #define NO_DIFF_SETTINGS 3
@@ -163,7 +168,7 @@ const GLfloat ringSpinInc = 1;
 int currentDiff = 1;
 
 /* Variables relating to levels */
-#define NO_LEVELS 2
+#define NO_LEVELS 4
 ringList *initialRing[NO_LEVELS] = {0};
 int currentLevel;
 mapParams levelParams[NO_LEVELS];
@@ -177,7 +182,7 @@ int keystate[256] = {0}; // Store if a key is pressed or not
 int keyToggle[256] = {0}; //Store if a key change has not been read yet
 
 /* Variables to store environment parameters */
-int fogState = FALSE;
+int fogState = TRUE;
 int pause = FALSE;
 int autopilot = FALSE;
 viewpoint cameraAngle;
@@ -220,7 +225,7 @@ const GLfloat posInc = 0.05;
 const GLfloat ringInc = 0.1;
 
 /* Light parameters */
-const GLfloat lightParam[2][4] = { {0.1,0.1,0.1,0.0},	//Ambient light - value is intensity
+const GLfloat lightParam[2][4] = { {0.5,0.5,0.5,0.0},	//Ambient light - value is intensity
                                    {0.5,0.5,0.5,0.5} };	//Specular light
 
 const GLfloat ringSpecular[] = {1.0, 1.0, 1.0, 1.0};
@@ -235,7 +240,7 @@ const GLfloat fogEndDepth = 0.05;
 /* Torus parameters */
 const GLint torusSides = 5;
 const GLint torusRings = 20;
-const GLfloat torusOuterRad[NO_DIFF_SETTINGS] = {20.0, 5.0, 3.0};
+const GLfloat torusOuterRad[NO_DIFF_SETTINGS] = {30.0, 5.0, 2.0};
 const GLfloat torusInnerRad[NO_DIFF_SETTINGS] = {torusOuterRad[0]/8, torusOuterRad[1]/8, torusOuterRad[2]/8};
 
 /* Wall parameters */
@@ -260,8 +265,9 @@ GLfloat yAng = 0; // Angle ship rotates around y axis (yaw)
 vector3d direction = {0,0,0}, velocity= {0,0,0}, normalisedVelocity = {0,0,0}, normalisedDir = {1,0,0};
 
 const GLfloat maxDir = 2.0;
-const GLfloat controllerPosInc = 0.5;
-const GLfloat keybPosInc = 0.1;
+const GLfloat controllerPosInc = 0.03;
+const GLfloat controllerAngInc = 1;
+const GLfloat keybPosInc = 0.05;
 const GLfloat maxYawAngle = 45.0;
 const GLfloat yawAngleInc = 1.0;
 
@@ -269,7 +275,7 @@ const GLfloat yawAngleInc = 1.0;
 #define UP 1
 #define DOWN 0
 
-const GLfloat maxForce[NO_DIFF_SETTINGS] = {250, 500,1000};
+const GLfloat maxForce[NO_DIFF_SETTINGS] = {300, 500, 800};
 const GLfloat forceIncrement = 100;
 const GLfloat airResistanceCoefficient = 0.005;
 const GLfloat autopilotForce = 300;
@@ -340,7 +346,7 @@ const GLfloat box3Coords[8] = { 0.0 - boxWidth/2.0 , 0.0 - boxHeight*1.5,
 
 
 /* Other stuff */
-#define NO_LIVES 3
+#define NO_LIVES 8
 
 const int maxVibration = 65535;
 int vibrationLatch = FALSE;
@@ -348,6 +354,9 @@ int vibrationLatch = FALSE;
 
 int score = 0;
 int lives = 3;
+int turboMode = FALSE;
+const int turboDelay = 500;
+const GLfloat turboMultiplier = 20.0;
 int gameOver = FALSE;
 float elapsedTime = 0;
 float timeOffset = 0;
@@ -361,10 +370,7 @@ int main(int argc, char **argv)
 	detectController();
 	controllerMode = FALSE;
 
-
-
 	/* Read levels */
-
 	int i;
 	char buf[100];
 	for(i=0; i<NO_LEVELS; i++)
@@ -374,13 +380,13 @@ int main(int argc, char **argv)
 		stateMaps[i] = readInput(buf, &levelParams[i], FALSE);
 	}
 
-	mapsToLinkedLists();
+//	mapsToLinkedLists();
 
 	currentLevel = 0;
 
 	cameraAngle = behind;
 
-	firstRing = currentRing = initialRing[currentLevel];
+//	firstRing = currentRing = initialRing[currentLevel];
 
 	/* Initialise the GLUT window manager */
 	glutInit(&argc, argv);       
@@ -406,6 +412,11 @@ int main(int argc, char **argv)
 	planeCentre = vectorConvert(getCentroid(planeMesh));
 	planeMax = vectorConvert(getMax(planeMesh));
 	planeMin = vectorConvert(getMin(planeMesh));
+
+	/* We rotate the plane when we draw it, so we need to rotate the centre, max and min also */
+	planeCentre = set3DVector(planeCentre.y, planeCentre.z, planeCentre.x);
+	planeMax = set3DVector(planeMax.y, planeMax.z, planeMax.x);
+	planeMin = set3DVector(planeMin.y, planeMin.z, planeMin.x);
 
 	/* Initialise OpenGL*/
 	initGl();
@@ -436,7 +447,7 @@ void initGl(void)
 	glEnable(GL_COLOR_MATERIAL);
 	glEnable(GL_LIGHT0);
 	glEnable(GL_LIGHT1);
-	glLightfv(GL_LIGHT0, GL_AMBIENT, lightParam[0]);
+	glLightfv(GL_LIGHT0, GL_DIFFUSE, lightParam[0]);
 	glLightfv(GL_LIGHT1, GL_SPECULAR, lightParam[1]);
 
 	glShadeModel (GL_SMOOTH);
@@ -450,6 +461,7 @@ void initGl(void)
     glHint(GL_FOG_HINT, GL_DONT_CARE);
 	glFogf(GL_FOG_START, fogStartDepth); // Start depth
 	glFogf(GL_FOG_END,fogEndDepth); // End depth
+	glEnable(GL_FOG);
 
 	/* Load the textures */
 	glGenTextures(numTextures, texName);
@@ -458,7 +470,7 @@ void initGl(void)
 	loadTexture(SKY_TEXTURE_NUM, SKY_TEXTURE_FILENAME);
 	loadCheckerTexData();
 
-	setWalls();
+//	setWalls();
 }
 
 /* This callback occurs whenever the system determines the window needs redrawing (or upon a call of glutPostRedisplay()) */
@@ -480,7 +492,7 @@ void display(void)
 			break;
 
 		case cockpit:
-			gluLookAt(planeMax.x,0,0, 1,0,0, 0,1,0);
+			gluLookAt(planeMax.x,0,0, planeMax.x +1,0,0, 0,1,0);
 			break;
 
 		case above:
@@ -506,8 +518,11 @@ void display(void)
 	{
 		if(controllerMode)
 		{
-			rotation.x = controllerRThumbX * 45.0;
-			rotation.y = controllerRThumbY * 45.0;
+			rotation.x = procControllerDir(rotation.x, controllerRThumbX, 45.0, controllerAngInc);
+			rotation.y = procControllerDir(rotation.y, controllerRThumbY, 45.0, controllerAngInc);
+
+//			rotation.x = controllerRThumbX * 45.0;
+//			rotation.y = controllerRThumbY * 45.0;
 		} else if(mouseViewLatch == FALSE)
 		{
 			rotation.x = -45.0+90*mousePos.x;
@@ -559,7 +574,7 @@ void display(void)
 	}
 
 	/* Draw walls */
-	glColor3f(0.0,1.0,0.0); /* Draw walls in green */
+	glColor3f(0.0,1.0,0.0); /* Draw untextured walls in green */
 
 
 	glVertexPointer(3,GL_FLOAT,0,frontWallVertices);
@@ -718,7 +733,7 @@ int **readInput(char* filename, mapParams *levelParameters, int position)
 
 	/* Read input to map */
 	int j;
-	char c;
+	int c;
 	for(i=0; i < levelParameters->rows; i++)
 		for(j=0; j < levelParameters->cols; j++)
 		{
@@ -733,6 +748,11 @@ int **readInput(char* filename, mapParams *levelParameters, int position)
 				do
 				{
 					c = fgetc(filePtr);
+					if( c == EOF)
+					{
+						puts("File reading Error");
+						exit(EXIT_FAILURE);
+					}
 				} while( c != 'S' && c != 'H' && c != 'V' && c != 'C' && c != 'A');
 
 				map[i][j] = c;
@@ -748,7 +768,7 @@ void controllerAdjForce(GLfloat accelerate, GLfloat brake)
 	force = (accelerate - brakeCoefficient*brake);
 	vibrateController(force*maxVibration, 0, -1, controllerPort); // Low freq - engine
 	force *= maxForce[currentDiff];
-	if(normalisedVelocity.x < 0)
+	if(velocity.x < 0)
 		force = 0;
 	return;
 }
@@ -775,8 +795,11 @@ void mouseAdjForce(int up, int down)
 			force -= 2*forceIncrement;
 	}
 
-	if(normalisedVelocity.x < 0)
+	if(velocity.x < 0)
 		force = 0;
+
+	if(force > maxForce[currentDiff])
+		force = maxForce[currentDiff];
 //	printf("Force: %f\n", force);
 }
 
@@ -788,7 +811,7 @@ void calculatePosition(void)
 
 	GLfloat velocityMagnitude = vectorMag(velocity);
 
-	if(normalisedVelocity.x >= 0)
+	if(velocity.x >= 0)
 		acceleration= force - airResistanceCoefficient*velocityMagnitude*velocityMagnitude;
 	else
 		acceleration= force + airResistanceCoefficient*velocityMagnitude*velocityMagnitude;
@@ -801,7 +824,7 @@ void calculatePosition(void)
 
 	velocity = vectorConstMult(rotatedDir, velocityMagnitude);
 
-	normalisedVelocity = rotateAboutY(velocity, -yAng);
+//	normalisedVelocity = rotateAboutY(velocity, -yAng);
 
 	pos = vectorAdd(pos, vectorConstMult(velocity,delayInSeconds) );
 
@@ -834,11 +857,25 @@ void timer(int x)
 
 	/* Collision test */
 	static ringList *lastCollision = NULL;
-	if(currentRing!= NULL && lastCollision != currentRing)
+	static ringList *lastInside = NULL;
+	int ringState;
+	if(currentRing!= NULL)
 		{
-			if(ringCollDetect(currentRing->position, currentRing->angle) == TRUE) // Detect a collision with the ring
-				lastCollision = currentRing;
+			ringState = ringCollDetect(currentRing->position, currentRing->angle);
+			if(ringState == COLLIDED && lastCollision != currentRing && !autopilot) // Detect a collision with the ring
+			{
+				lives--;
+					
+				if(controllerMode)
+					vibrateController(0, maxVibration, 1000, controllerPort); // high freq - lost life
+				lastCollision = lastInside = currentRing;
+
+			} else if(ringState == INSIDE && lastInside != currentRing) {
+					score++;
+					lastInside = currentRing;
+			}
 		}
+
 
 	vector3d minPos = vectorAdd(pos, planeMin);
 	vector3d maxPos = vectorAdd(pos, planeMax);
@@ -981,6 +1018,29 @@ void timer(int x)
 	else
 		mouseAdjForce(keystate['o'], keystate['l']);
 
+	static int APrevState = FALSE;
+	if(keystate['t'] == TRUE && keyToggle['t'] == TRUE || controllerButtons & XINPUT_GAMEPAD_A && APrevState == FALSE) // Toggle fog
+	{
+		keyToggle['t'] = FALSE;
+		
+		if(!turboMode)
+		{
+			toggleTurbo(0);
+			glutTimerFunc(turboDelay,toggleTurbo,0);
+		}
+	}
+	APrevState = controllerButtons & XINPUT_GAMEPAD_A;
+
+	static int BPrevState = FALSE;
+	if( controllerButtons & XINPUT_GAMEPAD_B && BPrevState == FALSE) // Toggle fog
+	{
+		controllerInvert = !controllerInvert;
+	}
+	APrevState = controllerButtons & XINPUT_GAMEPAD_A;
+
+	if(turboMode)
+		force = maxForce[currentDiff] * turboMultiplier;
+
 	if(autopilot == TRUE)
 	{
 		force = autopilotForce;
@@ -997,8 +1057,14 @@ void timer(int x)
 					direction.y = 0;
 					direction.z = 0;
 				}
-			} else
+			} else {
 				direction = vectorAdd(currentRing->position, vectorInvert(pos));
+//				if(pos.x > (currentRing->position.x - 5*torusOuterRad[currentDiff]) && abs(sin(currentRing->angle)) > 0.5)
+//				{
+//					printf("%f\n", abs(sin(currentRing->angle)));
+//					force = -autopilotForce;
+//					velocity = vectorConstMult(velocity, 0);
+			}
 		} else {
 			direction.x = 1;
 			direction.y = 0;
@@ -1008,8 +1074,15 @@ void timer(int x)
 
 	} else if(controllerMode)
 	{
-		direction.z = procControllerDir(direction.z, controllerLThumbX, maxDir, controllerPosInc);
-		direction.y = procControllerDir(direction.y, controllerLThumbY, maxDir, controllerPosInc);
+		if(controllerInvert)
+		{
+			direction.z = procControllerDir(direction.z, controllerLThumbX, maxDir, controllerPosInc);
+			direction.y = procControllerDir(direction.y, -controllerLThumbY, maxDir, controllerPosInc);
+		} else {
+			direction.z = procControllerDir(direction.z, controllerLThumbX, maxDir, controllerPosInc);
+			direction.y = procControllerDir(direction.y, controllerLThumbY, maxDir, controllerPosInc);
+		}
+
 	} else if(mouseAction == control)
 	{
 		direction.z = -5.0f + 10.0f*mousePos.x;
@@ -1024,9 +1097,9 @@ void timer(int x)
 	{
 		controllerButtons & XINPUT_GAMEPAD_LEFT_SHOULDER ? 	left = TRUE: left = FALSE;
 		controllerButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER ? right = TRUE: right = FALSE;
-		yAng = procKeybDir(yAng, left, right, maxYawAngle, yawAngleInc, 1, FALSE);
+		yAng = procKeybDir(yAng, left, right, maxYawAngle, yawAngleInc, 1, TRUE);
 	} else
-		yAng = procKeybDir(yAng, keystate['i'],keystate['k'], maxYawAngle, yawAngleInc, 1, FALSE);
+		yAng = procKeybDir(yAng, keystate['i'],keystate['k'], maxYawAngle, yawAngleInc, 1, TRUE);
 
 //	printf("direction: x:%f, y:%f, z:%f\nvelocity: x:%f, y:%f, z:%f\npos: x:%f, y:%f, z:%f\nyAng: %f\n",direction.x,direction.y,direction.z, velocity.x,velocity.y, velocity.z,pos.x,pos.y,pos.z,yAng);
 
@@ -1036,7 +1109,12 @@ void timer(int x)
 	if(currentRing != NULL)
 	{
 		if(currentRing->position.x + torusInnerRad[currentDiff] < pos.x + planeMin.x) // If we are passed the ring
+		{
+			if(lastInside != currentRing && !autopilot)
+				score -= 5;
+
 			currentRing = currentRing->next;
+		}
 	}
 	
 	glutTimerFunc(delay, timer, 0);
@@ -1126,38 +1204,44 @@ GLfloat procKeybDir(GLfloat direction, int up, int down, GLfloat max, GLfloat in
 	return direction;
 }
 
+
 int ringCollDetect(vector3d centre, GLfloat angle)
 {
-	vector3d relativePlanePos;
-	const GLfloat torusTotal = torusOuterRad[currentDiff]+torusInnerRad[currentDiff];
-	const GLfloat torusGap = torusOuterRad[currentDiff]-torusInnerRad[currentDiff];
+//	vector3d relPlanePos = vectorAdd(pos, vectorInvert(centre)); // Find plane pos if ring was 0,0,0
+//	relPlanePos = rotateAboutY(relPlanePos, angle);
+	GLfloat torusTotal = torusOuterRad[currentDiff]+torusInnerRad[currentDiff];
+	GLfloat torusGap = torusOuterRad[currentDiff]-torusInnerRad[currentDiff];
+
+	GLfloat cosAng = abs(cos(degsToRads*angle));
+	GLfloat sinAng = abs(sin(degsToRads*angle));
+
+	GLfloat torOutCos = torusOuterRad[currentDiff]*cosAng;
+	GLfloat torOutSin = torusOuterRad[currentDiff]*sinAng;
+	GLfloat torGapCos = torusGap*cosAng;
+	GLfloat torInner = torusInnerRad[currentDiff];
 
 	/* Check if inside */
-	if(pos.x + planeMax.x > centre.x - torusInnerRad[currentDiff] && pos.x + planeMin.x < centre.x + torusInnerRad[currentDiff])
+	if(pos.x + planeMax.x > centre.x - (torInner + torOutSin ) && pos.x + planeMin.x < centre.x + (torInner + torOutSin))
 	{
-		if(pos.z + planeMin.z < centre.z + torusTotal && pos.z + planeMax.z > centre.z - torusTotal )
+		if(pos.z + planeMin.z < centre.z + (torInner + torOutCos) && pos.z + planeMax.z > centre.z - (torInner + torOutCos))
 		{
 			if(pos.y + planeMax.y > centre.y - torusTotal && pos.y + planeMin.y < centre.y + torusTotal)
 			{
 				/* If we're here, we're inside */
-				score++;
+
 				/* Check if collided */
-				printf("%d %d %d %d\n", (pos.z + planeMax.z > centre.z + torusGap), (pos.z + planeMin.z < centre.z - torusGap), (pos.y + planeMin.y < centre.y - torusGap), (pos.y + planeMax.y > centre.y + torusGap));
-				if( (pos.z + planeMax.z > centre.z + torusGap) || (pos.z + planeMin.z < centre.z - torusGap) || (pos.y + planeMin.y < centre.y - torusGap) || (pos.y + planeMax.y > centre.y + torusGap) )
+				printf("%d %d %d %d\n", (pos.z + planeMax.z > centre.z + torGapCos), (pos.z + planeMin.z < centre.z - torGapCos), (pos.y + planeMin.y < centre.y - torusGap), (pos.y + planeMax.y > centre.y + torusGap));
+				if( (pos.z + planeMax.z > centre.z + torGapCos) || (pos.z + planeMin.z < centre.z - torGapCos) || (pos.y + planeMin.y < centre.y - torusGap) || (pos.y + planeMax.y > centre.y + torusGap) )
 				{
-					score--;
-					lives--;
-					
-					if(controllerMode)
-						vibrateController(0, maxVibration, 1000, controllerPort); // high freq - lost life
 //					printf("Collided.\n");
+					return COLLIDED;
 				}
-				return TRUE;
+				return INSIDE;
 			}
 		}
 	}
 
-	return FALSE;
+	return OUTSIDE;
 }
 
 vector3d vectorConvert(Vector3f vector)
@@ -1217,13 +1301,6 @@ void renderText(char *string, GLfloat x, GLfloat y, int centred)
 
 void idle(void)
 {
-	static ringList *lastCollision = NULL;
-
-	if(currentRing != NULL)
-	{
-		if(currentRing->position.x + torusInnerRad[currentDiff] < pos.x + planeMin.x) // If we are passed the ring
-			currentRing = currentRing->next;
-	}
 
 	if(!pause)
 		calcFps();
@@ -1578,6 +1655,8 @@ void newGame(int computerGame, int reset)
 	{
 		lives = NO_LIVES;
 		score = currentLevel = 0;
+		timeOffset += elapsedTime;
+		elapsedTime = 0;
 	}
 
 	mapsToLinkedLists();
@@ -1590,11 +1669,11 @@ void newGame(int computerGame, int reset)
 		                             xLwrBnd, yUprBnd, zLwrBnd);
 */
 
-	gameOver = pause = mouseViewLatch = fogState =FALSE;
-	mouseAction = none;
+	gameOver = pause = mouseViewLatch = FALSE;
 
-	timeOffset = elapsedTime;
-	elapsedTime = 0;
+	fogState = TRUE;
+
+	mouseAction = none;
 
 	if(computerGame)
 	{
@@ -1779,6 +1858,11 @@ void moveRings(void)
 
 			if(nextToProc->angle >= 360.0)
 				nextToProc->angle -= 360.0;
+		} else {
+			nextToProc->angle -= ringSpinInc;
+
+			if(nextToProc->angle <= -360.0)
+				nextToProc->angle += 360.0;
 		}
 	}
 }
@@ -1927,4 +2011,9 @@ void freeLinkedList(ringList *list)
 		list = list->next;
 		free(temp);
 	}
+}
+
+void toggleTurbo(int x)
+{
+	turboMode = !turboMode;
 }
