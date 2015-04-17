@@ -4,7 +4,7 @@ A flight simulator written in C running using  OpenGL and GLUT.
 
 The object of the game is to fly an airplane through rings, sometimes stationary, sometimes moving. Points are awarded for flying through a ring, and deducted for missing a ring. Lives are lost for colliding with a ring.
 
-![Gameplay image](https://github.com/joshtyler/Flight-Simulator/Docs/Images/Picture1.png "Main menu, demonstrating autopilot")
+![Gameplay image](https://github.com/joshtyler/Flight-Simulator/raw/master/Docs/Images/Picture1.png "Main menu, demonstrating autopilot")
 
 ##Control
 The game is controlled with either a keyboard alone, keyboard and mouse or an Xbox 360 controller. The Xbox 360 controller provides the best overall experience, including vibration feedback.
