@@ -1,0 +1,22 @@
+20 4
+
+H H H H
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
+S S S S
